@@ -41,6 +41,8 @@ class Runtime:
         self.workflow = WorkflowRunner()
         self.approvals = ApprovalService(self.workflow)
         self._wire_pipeline()
+        self.pipeline.pause()
+        self.pipeline.start()
 
 
 runtime = Runtime()

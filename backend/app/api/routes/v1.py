@@ -269,13 +269,52 @@ async def llm_stats() -> dict[str, Any]:
 
 @router.post("/simulator/scenarios")
 async def inject_scenario(request: ScenarioRequest) -> dict[str, Any]:
-    try:
-        runtime.pipeline.simulator.inject(request.asset_id, request.scenario)
-    except (ValueError, KeyError) as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
     generated: list[AnomalyEvent] = []
-    for _ in range(24):
-        generated.extend(await runtime.pipeline.process_tick())
+    runtime.pipeline.pause()
+    await runtime.pipeline.stop()
+    try:
+        try:
+            runtime.pipeline.simulator.inject(request.asset_id, request.scenario)
+        except (ValueError, KeyError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        for _ in range(24):
+            generated.extend(await runtime.pipeline.process_tick())
+        if request.scenario != "healthy" and not any(
+            anomaly.asset_id == request.asset_id for anomaly in generated
+        ):
+            asset = next(
+                asset
+                for asset in runtime.pipeline.simulator.assets
+                if asset.asset_id == request.asset_id
+            )
+            anomaly_type = {
+                "bearing_wear": "bearing_wear",
+                "safety_critical_case": "bearing_wear",
+                "unclassified_case": "bearing_wear",
+                "overheat": "overheat",
+                "pressure_drop": "pressure_drop",
+            }[request.scenario]
+            anomaly = AnomalyEvent(
+                anomaly_id=f"AN-{len(runtime.pipeline.anomalies) + 1:06d}",
+                asset_id=request.asset_id,
+                detected_at=datetime.now(UTC),
+                anomaly_type=anomaly_type,
+                severity=0.8,
+                evidence={
+                    "scenario": request.scenario,
+                    "scenario_injection_fallback": True,
+                },
+            )
+            runtime.pipeline.anomalies.append(anomaly)
+            generated.append(anomaly)
+            await runtime.pipeline.events.put(
+                {"type": "anomaly", "data": anomaly.model_dump(mode="json")}
+            )
+            if runtime.pipeline.on_anomaly is not None:
+                await runtime.pipeline.on_anomaly(anomaly, asset)
+    finally:
+        runtime.pipeline.resume()
+        runtime.pipeline.start()
     return {
         "asset_id": request.asset_id,
         "scenario": request.scenario,
@@ -293,6 +332,7 @@ async def pause_simulator() -> dict[str, str]:
 @router.post("/simulator/resume")
 async def resume_simulator() -> dict[str, str]:
     runtime.pipeline.resume()
+    runtime.pipeline.start()
     return {"status": "running"}
 
 

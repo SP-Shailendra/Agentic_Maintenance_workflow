@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  Activity, Check, ChevronDown, CircleAlert, CircleCheck,
+  Activity, Check, ChevronDown, CircleAlert, CircleCheck, ClipboardCheck, Cpu,
   Clock3, ExternalLink, Filter, RotateCw, ShieldAlert, ShieldCheck, Siren, WifiOff,
 } from 'lucide-react';
 import {
