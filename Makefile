@@ -10,16 +10,16 @@ backend:
 	cd backend && python -m uvicorn app.main:app --reload
 
 frontend:
-	cd frontend && npm run dev
+	docker compose up frontend
 
 seed:
-	cd backend && python scripts/seed.py
+	cd backend && alembic upgrade head && python -m scripts.seed
 
 simulate:
-	cd backend && python scripts/simulate.py
+	cd backend && python -m scripts.simulate
 
 evaluate:
-	cd backend && python scripts/evaluate_detection.py
+	cd backend && python -m scripts.evaluate_detection
 
 test:
 	cd backend && python -m pytest
@@ -28,4 +28,4 @@ lint:
 	cd backend && ruff check app tests scripts
 
 demo:
-	cd backend && python scripts/e2e_demo.py
+	cd backend && python -m scripts.e2e_demo

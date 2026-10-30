@@ -30,5 +30,18 @@ services:
       db:
         condition: service_healthy
 
+  frontend:
+    image: node:20-alpine
+    working_dir: /workspace/frontend
+    volumes:
+      - .:/workspace
+      - /workspace/frontend/node_modules
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+      VITE_PIPELINE_MODE: ${PIPELINE_MODE:-live}
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install --package-lock-only && npm ci && npm run dev -- --host 0.0.0.0"
+
 volumes:
   maintenance_pgdata:
