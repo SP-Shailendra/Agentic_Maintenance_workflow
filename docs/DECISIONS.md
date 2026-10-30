@@ -8,3 +8,4 @@
 | ADR-004 | Part availability checks are read-only; reservations happen only after approval. | Prevents unapproved work from consuming inventory. |
 | ADR-005 | Use a plain append-only application ledger with canonical JSON and SHA-256 chaining. | Provides deterministic verification without relying on database extensions. |
 | ADR-006 | A deterministic fake LLM is the offline default. | Tests and demos work without credentials; Groq is opt-in. |
+| ADR-007 | Availability is checked before approval; reservations are committed only after approval. | The source design notes conflict on reservation timing; the explicit safety rule forbids pre-approval reservations. |

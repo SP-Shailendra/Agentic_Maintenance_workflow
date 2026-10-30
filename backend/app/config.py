@@ -1,8 +1,25 @@
 """Environment-backed configuration for the workflow and local demo."""
 
+import os
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except ImportError:
+    from pydantic import BaseModel, ConfigDict
+
+    def SettingsConfigDict(**kwargs: object) -> ConfigDict:
+        return ConfigDict(**kwargs)
+
+    class BaseSettings(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+        def __init__(self, **data: object) -> None:
+            for name in type(self).model_fields:
+                environment_value = os.getenv(name.upper())
+                if environment_value is not None:
+                    data.setdefault(name, environment_value)
+            super().__init__(**data)
 
 
 class Settings(BaseSettings):
