@@ -43,6 +43,7 @@ class Asset(StrictModel):
     install_date: datetime
     site_id: str
     location: str
+    days_since_last_pm: int = Field(default=0, ge=0)
 
     @property
     def is_safety_critical(self) -> bool:

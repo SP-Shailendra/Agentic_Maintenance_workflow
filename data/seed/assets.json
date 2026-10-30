@@ -1,0 +1,7 @@
+[
+  {"asset_id":"WD-001","name":"Wire Draw Motor 1","asset_class":"wire_draw_motor","criticality_tier":2,"safety_critical":false,"install_date":"2020-03-15T00:00:00Z","site_id":"PLANT-1","location":"Line A","days_since_last_pm":38},
+  {"asset_id":"WD-002","name":"Wire Draw Motor 2","asset_class":"wire_draw_motor","criticality_tier":3,"safety_critical":false,"install_date":"2019-08-20T00:00:00Z","site_id":"PLANT-1","location":"Line B","days_since_last_pm":71},
+  {"asset_id":"TG-001","name":"Test Cell Generator","asset_class":"testcell_generator","criticality_tier":1,"safety_critical":false,"install_date":"2021-01-10T00:00:00Z","site_id":"PLANT-1","location":"Test Cell 1","days_since_last_pm":22},
+  {"asset_id":"IC-001","name":"Imaging Chiller 1","asset_class":"imaging_chiller","criticality_tier":1,"safety_critical":true,"install_date":"2022-05-01T00:00:00Z","site_id":"CLINIC-1","location":"Imaging Suite A","days_since_last_pm":14},
+  {"asset_id":"IC-002","name":"Imaging Chiller 2","asset_class":"imaging_chiller","criticality_tier":2,"safety_critical":null,"install_date":"2023-02-11T00:00:00Z","site_id":"CLINIC-1","location":"Imaging Suite B","days_since_last_pm":46}
+]

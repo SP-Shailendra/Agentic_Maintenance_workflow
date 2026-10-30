@@ -1,0 +1,8 @@
+[
+  {"part_number":"BRG-101","description":"Motor bearing assembly","quantity":8,"unit_cost":145.0,"storeroom":"PLANT-1-MRO"},
+  {"part_number":"GRS-201","description":"High-speed bearing grease","quantity":20,"unit_cost":18.5,"storeroom":"PLANT-1-MRO"},
+  {"part_number":"FAN-301","description":"Cooling fan assembly","quantity":0,"unit_cost":390.0,"storeroom":"CLINIC-1-MRO","lead_days":14},
+  {"part_number":"SEAL-401","description":"Refrigerant seal kit","quantity":5,"unit_cost":82.0,"storeroom":"CLINIC-1-MRO"},
+  {"part_number":"REF-501","description":"Medical chiller refrigerant","quantity":6,"unit_cost":120.0,"storeroom":"CLINIC-1-MRO"},
+  {"part_number":"CAP-601","description":"Generator capacitor","quantity":4,"unit_cost":54.0,"storeroom":"PLANT-1-MRO"}
+]

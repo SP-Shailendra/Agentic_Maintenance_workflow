@@ -1,0 +1,6 @@
+[
+  {"technician_id":"TECH-001","name":"Morgan Chen","skills":["VIB","MECH","ELEC"],"available":true},
+  {"technician_id":"TECH-002","name":"Sam Rivera","skills":["HVAC","MECH","ELEC"],"available":true},
+  {"technician_id":"TECH-003","name":"Alex Patel","skills":["VIB","MECH","HVAC","ELEC"],"available":false},
+  {"technician_id":"TECH-004","name":"Jamie Brooks","skills":["ELEC","MECH"],"available":true}
+]
