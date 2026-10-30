@@ -178,6 +178,7 @@ class FakeGroqLLM:
 
     def __init__(self) -> None:
         self.stats: list[LLMCallStat] = []
+        self.fail = False
 
     async def structured(
         self,
@@ -188,6 +189,8 @@ class FakeGroqLLM:
         strict: bool = True,
     ) -> T:
         del system, strict
+        if self.fail:
+            raise GroqClientError("Fake LLM failure injected")
         selected_model = model or "fake-deterministic"
         if schema_model.__name__ == "WorkOrderProposal":
             request = json.loads(user)

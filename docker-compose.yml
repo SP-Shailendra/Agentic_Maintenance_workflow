@@ -15,5 +15,20 @@ services:
       timeout: 3s
       retries: 10
 
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://maintenance:maintenance@db:5432/maintenance
+      LLM_MODE: ${LLM_MODE:-fake}
+      PIPELINE_MODE: ${PIPELINE_MODE:-live}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   maintenance_pgdata:

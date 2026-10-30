@@ -1,6 +1,7 @@
 """L1 streaming runner connecting normalization, bus, features, and detectors."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,7 +13,7 @@ from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
 from app.datapulse_ai.detection.suppression import AlertSuppressor
 from app.datapulse_ai.features import FeatureEngine
-from app.schemas.domain import AnomalyEvent, TelemetryReading
+from app.schemas.domain import AnomalyEvent, Asset, TelemetryReading
 
 
 class PipelineRunner:
@@ -32,6 +33,7 @@ class PipelineRunner:
         self.health: dict[str, float] = {asset.asset_id: 100.0 for asset in self.simulator.assets}
         self._task: asyncio.Task[None] | None = None
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.on_anomaly: Callable[[AnomalyEvent, Asset], Awaitable[None]] | None = None
 
     async def process_tick(self) -> list[AnomalyEvent]:
         tick_anomalies: list[AnomalyEvent] = []
@@ -100,6 +102,9 @@ class PipelineRunner:
             self.anomalies.append(anomaly)
             tick_anomalies.append(anomaly)
             await self.events.put({"type": "anomaly", "data": anomaly.model_dump(mode="json")})
+            if self.on_anomaly is not None:
+                asset = next(item for item in self.simulator.assets if item.asset_id == asset_id)
+                await self.on_anomaly(anomaly, asset)
         return tick_anomalies
 
     @staticmethod
