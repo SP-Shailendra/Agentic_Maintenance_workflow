@@ -23,12 +23,17 @@ In development, approval identity comes from the `X-Approver-Id` header (default
 | GET | `/audit/verify` | Chain validity and first failing sequence |
 | GET | `/kpis` | Runtime workflow and suppression metrics |
 | GET | `/llm/stats` | LLM call outcomes, token totals, and latency |
-| POST | `/simulator/scenarios` | Inject a named scenario for an asset |
+| POST | `/simulator/scenarios` | Configure a timed, seeded scenario; returns ground truth separately from detector output |
+| GET | `/simulator/scenarios` | List active scenarios and remaining ticks |
+| DELETE | `/simulator/scenarios/{asset_id}` | Clear an asset's active scenario |
+| POST | `/simulator/demo-workflow` | Send a clearly labeled event directly to workflow approval, bypassing detection |
 | POST | `/simulator/pause` | Pause simulator loop |
 | POST | `/simulator/resume` | Resume simulator loop |
 | POST | `/simulator/reset` | Reset in-memory demo services and simulator |
 | POST | `/simulator/failures` | Inject CMMS, inventory, and fake-LLM failures |
 | GET | `/stream` | Server-sent event stream |
+
+Scenario injection accepts `asset_id`, `scenario`, `severity` (0-1), `duration_ticks` (default 120), and optional `seed`. Its response keeps scenario ground truth separate from `anomalies`; a detector miss remains a miss. Use `/simulator/demo-workflow` only when demonstrating the approval workflow independently of anomaly detection.
 
 ## Decision Body
 
@@ -46,6 +51,6 @@ Allowed decisions are `approve`, `modify_approve`, `reject`, and `escalate`. The
 
 ## SSE Events
 
-`GET /stream` uses `text/event-stream`; each message has the event name and a JSON `data` field. Implemented event names are `telemetry`, `anomaly`, `suppressed`, `workflow_step`, `approval_requested`, `approval_decided`, `sla_warning`, `sla_escalated`, and `audit_event`. The stream emits a comment heartbeat while idle. The current demo runtime is process-local; events are not durable across backend restarts.
+`GET /stream` uses `text/event-stream`; each message has the event name and a JSON `data` field. Implemented event names are `telemetry`, `anomaly`, `suppressed`, `workflow_step`, `approval_requested`, `approval_decided`, `sla_warning`, `sla_escalated`, `audit_event`, `scenario_started`, `scenario_cleared`, and `workflow_demo_injected`. The stream emits a comment heartbeat while idle. The current demo runtime is process-local; events are not durable across backend restarts.
 
 The current API reports database readiness as `configured_not_connected_in_memory_mode`. PostgreSQL metadata, Alembic schema, and a durable LangGraph checkpointer are included, but the demo API does not claim that its runtime records are persisted to those tables.

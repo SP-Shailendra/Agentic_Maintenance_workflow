@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 const eventNames = [
   'telemetry', 'anomaly', 'suppressed', 'workflow_step', 'approval_requested',
   'approval_decided', 'sla_warning', 'sla_escalated', 'audit_event', 'health',
+  'scenario_started', 'scenario_cleared', 'workflow_demo_injected',
 ] as const;
 
 export type StreamEvent = { type: string; data: unknown; receivedAt: number };

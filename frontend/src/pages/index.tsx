@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import {
   api,
   decide,
+  type ActiveScenario,
   type ApprovalPackage,
   type Asset,
   type AuditEvent,
@@ -235,14 +236,49 @@ export function SystemPage({ refreshKey }: Props) {
 
 export function SimulatorPage() {
   const assets = useLoad<Asset[]>('/assets');
+  const [scenarioRevision, setScenarioRevision] = useState(0);
+  const activeScenarios = useLoad<ActiveScenario[]>('/simulator/scenarios', scenarioRevision);
   const [selectedAsset, setSelectedAsset] = useState('WD-001');
+  const [severity, setSeverity] = useState(0.8);
+  const [durationTicks, setDurationTicks] = useState(120);
+  const [scenarioSeed, setScenarioSeed] = useState(17);
   const [message, setMessage] = useState('');
   const [failures, setFailures] = useState({ cmms_down: false, inventory_down: false, llm_fail: false });
   async function scenario(name: string) {
     try {
-      const result = await api<{ pending_approvals: number }>('/simulator/scenarios', { method: 'POST', body: JSON.stringify({ asset_id: selectedAsset, scenario: name }) });
-      setMessage(`${name.replaceAll('_', ' ')} injected · ${result.pending_approvals} approval(s) pending`);
+      const result = await api<{ detected: boolean; pending_approvals: number }>('/simulator/scenarios', {
+        method: 'POST',
+        body: JSON.stringify({
+          asset_id: selectedAsset,
+          scenario: name,
+          severity,
+          duration_ticks: durationTicks,
+          seed: scenarioSeed,
+        }),
+      });
+      setScenarioRevision((value) => value + 1);
+      setMessage(
+        result.detected
+          ? `${name.replaceAll('_', ' ')} · detector event observed · ${result.pending_approvals} approval(s) pending`
+          : `${name.replaceAll('_', ' ')} active · no detector event observed yet`,
+      );
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Scenario failed'); }
+  }
+  async function clearScenario(assetId: string) {
+    try {
+      await api(`/simulator/scenarios/${encodeURIComponent(assetId)}`, { method: 'DELETE' });
+      setScenarioRevision((value) => value + 1);
+      setMessage(`Scenario cleared for ${assetId}`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Scenario clear failed'); }
+  }
+  async function injectWorkflowDemo() {
+    try {
+      const result = await api<{ status: string }>('/simulator/demo-workflow', {
+        method: 'POST',
+        body: JSON.stringify({ asset_id: selectedAsset }),
+      });
+      setMessage(`Direct workflow demo event · ${result.status} · not a detector event`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Workflow demo failed'); }
   }
   async function control(action: 'pause' | 'resume' | 'reset') {
     try { await api(`/simulator/${action}`, { method: 'POST' }); setMessage(`Simulator ${action}d`); }
@@ -258,7 +294,14 @@ export function SimulatorPage() {
     <PageHeading eyebrow="CONTROLLED DEMONSTRATION" title="Simulator" subtitle="Inject labeled scenarios and integration failures into the isolated demo plant." />
     {message && <div className="inline-message" role="status">{message}</div>}
     <div className="simulator-toolbar"><label className="field-label" htmlFor="scenario-asset">TARGET ASSET</label><select id="scenario-asset" value={selectedAsset} onChange={(event) => setSelectedAsset(event.target.value)}>{assets.data?.map((asset) => <option value={asset.asset_id} key={asset.asset_id}>{asset.asset_id} / {asset.name}</option>)}</select><div className="button-row"><button className="button button-primary" onClick={() => void control('resume')}>Resume</button><button className="button button-secondary" onClick={() => void control('pause')}>Pause</button><button className="button button-secondary" onClick={() => void control('reset')}>Reset</button></div></div>
+    <div className="scenario-settings">
+      <label htmlFor="scenario-severity">Severity <output>{severity.toFixed(1)}</output><input id="scenario-severity" type="range" min="0.1" max="1" step="0.1" value={severity} onChange={(event) => setSeverity(Number(event.target.value))} /></label>
+      <label htmlFor="scenario-duration">Duration in ticks<input id="scenario-duration" type="number" min="1" max="10000" value={durationTicks} onChange={(event) => setDurationTicks(Number(event.target.value))} /></label>
+      <label htmlFor="scenario-seed">Random seed<input id="scenario-seed" type="number" value={scenarioSeed} onChange={(event) => setScenarioSeed(Number(event.target.value))} /></label>
+    </div>
     <section className="scenario-section"><div className="section-title"><span>LABELED SCENARIOS</span><b>DETERMINISTIC INPUTS</b></div><div className="scenario-grid">{[['healthy', 'Healthy', 'Reference operation'], ['bearing_wear', 'Bearing wear', 'Vibration + temperature drift'], ['overheat', 'Overheat', 'Temperature + current rise'], ['pressure_drop', 'Pressure drop', 'Pressure trend decreases'], ['safety_critical_case', 'Safety-critical case', 'Chiller authorization path'], ['unclassified_case', 'Unclassified case', 'Missing safety classification']].map(([value, title, detail]) => <button className="scenario-button" key={value} onClick={() => void scenario(value)}><span className="scenario-glyph"><Activity size={17} /></span><strong>{title}</strong><small>{detail}</small></button>)}</div></section>
+    <section className="scenario-section"><div className="section-title"><span>ACTIVE SCENARIOS</span><b>{activeScenarios.data?.length ?? 0} RUNNING</b></div>{activeScenarios.data?.length ? <div className="active-scenario-list">{activeScenarios.data.map((active) => <div className="active-scenario" key={active.scenario_id}><div><strong>{active.asset_id} / {active.scenario.replaceAll('_', ' ')}</strong><span>Severity {active.severity.toFixed(1)} · {active.remaining_ticks ?? '∞'} ticks remaining · seed {active.seed ?? 'default'}</span></div><button className="button button-secondary" onClick={() => void clearScenario(active.asset_id)}>Clear</button></div>)}</div> : <p className="muted-copy">No timed scenarios are active.</p>}</section>
+    <section className="scenario-section workflow-demo-section"><div><div className="section-title"><span>WORKFLOW DEMONSTRATION</span><b>SEPARATE FROM DETECTION</b></div><p className="muted-copy">Send a labeled demo event straight to approval without adding a detector anomaly.</p></div><button className="button button-primary" onClick={() => void injectWorkflowDemo()}>Send workflow demo event</button></section>
     <section className="scenario-section failure-section"><div className="section-title"><span>FAILURE INJECTION</span><b>DEGRADED-PATH TESTING</b></div><div className="failure-list">{([["cmms_down", "CMMS unavailable"], ["inventory_down", "Inventory unavailable"], ["llm_fail", "LLM unavailable"]] as const).map(([key, title]) => <label className="failure-toggle" key={key}><span><strong>{title}</strong><small>Simulate dependency failure</small></span><input type="checkbox" checked={failures[key]} onChange={() => void toggleFailure(key)} /><i /></label>)}</div></section>
     <p className="simulator-limit"><ShieldAlert size={15} />No OT connection. Scenarios affect in-memory simulator data only.</p>
   </>;

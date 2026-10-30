@@ -21,17 +21,46 @@ def test_scenario_creates_approval_and_records_approver() -> None:
         client.post("/api/v1/simulator/reset")
         result = client.post(
             "/api/v1/simulator/scenarios",
-            json={"asset_id": "IC-001", "scenario": "safety_critical_case"},
+            json={
+                "asset_id": "IC-001",
+                "scenario": "safety_critical_case",
+                "severity": 0.6,
+                "duration_ticks": 100,
+                "seed": 31,
+            },
         )
         assert result.status_code == 200
-        approvals = client.get("/api/v1/approvals").json()
-        package = next(item for item in approvals if item["asset_id"] == "IC-001")
-        assert "safety_critical" in package["reasons_for_hitl"]
+        scenario_result = result.json()
+        assert scenario_result["ground_truth"]["severity"] == 0.6
+        assert scenario_result["ground_truth"]["duration_ticks"] == 100
+        assert scenario_result["ground_truth"]["seed"] == 31
+        assert all(
+            "scenario_injection_fallback" not in anomaly["evidence"]
+            for anomaly in scenario_result["anomalies"]
+        )
+        active = client.get("/api/v1/simulator/scenarios").json()
+        assert active[0]["asset_id"] == "IC-001"
+        assert active[0]["severity"] == 0.6
+        assert active[0]["remaining_ticks"] == 100 - active[0]["elapsed_ticks"]
+        assert client.delete("/api/v1/simulator/scenarios/IC-001").json()["cleared"] is True
+        assert client.get("/api/v1/simulator/scenarios").json() == []
 
+        demo = client.post("/api/v1/simulator/demo-workflow", json={"asset_id": "IC-001"})
+        assert demo.status_code == 200
+        package = demo.json()["approval_package"]
+        assert demo.json()["event_source"] == "workflow_demo_injection"
+        assert demo.json()["status"] == "pending_approval"
+        assert "safety_critical" in package["reasons_for_hitl"]
+        assert all(
+            anomaly.anomaly_id != demo.json()["correlation_id"]
+            for anomaly in runtime.pipeline.anomalies
+        )
+
+        correlation_id = demo.json()["correlation_id"]
         missing_reason = client.post(
-            f"/api/v1/approvals/{package['correlation_id']}/decision",
+            f"/api/v1/approvals/{correlation_id}/decision",
             json={
-                "correlation_id": package["correlation_id"],
+                "correlation_id": correlation_id,
                 "decision": "reject",
                 "approver": "ignored",
             },
@@ -39,10 +68,10 @@ def test_scenario_creates_approval_and_records_approver() -> None:
         assert missing_reason.status_code == 422
 
         approved = client.post(
-            f"/api/v1/approvals/{package['correlation_id']}/decision",
+            f"/api/v1/approvals/{correlation_id}/decision",
             headers={"X-Approver-Id": "technician-supervisor"},
             json={
-                "correlation_id": package["correlation_id"],
+                "correlation_id": correlation_id,
                 "decision": "approve",
                 "approver": "untrusted-body-value",
             },

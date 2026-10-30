@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import get_settings
 from app.runtime import runtime
@@ -25,6 +25,15 @@ class StrictRequest(BaseModel):
 class ScenarioRequest(StrictRequest):
     asset_id: str
     scenario: str
+    severity: float = Field(default=0.8, ge=0, le=1)
+    duration_ticks: int = Field(default=120, ge=1, le=10000)
+    seed: int | None = None
+
+
+class DemoWorkflowRequest(StrictRequest):
+    asset_id: str
+    anomaly_type: str = "demo_workflow_injection"
+    severity: float = Field(default=0.8, ge=0, le=1)
 
 
 class FailureRequest(StrictRequest):
@@ -274,53 +283,80 @@ async def inject_scenario(request: ScenarioRequest) -> dict[str, Any]:
     await runtime.pipeline.stop()
     try:
         try:
-            runtime.pipeline.simulator.inject(request.asset_id, request.scenario)
+            scenario = runtime.pipeline.simulator.inject(
+                request.asset_id,
+                request.scenario,
+                severity=request.severity,
+                duration_ticks=request.duration_ticks,
+                seed=request.seed,
+            )
         except (ValueError, KeyError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         for _ in range(24):
             generated.extend(await runtime.pipeline.process_tick())
-        if request.scenario != "healthy" and not any(
-            anomaly.asset_id == request.asset_id for anomaly in generated
-        ):
-            asset = next(
-                asset
-                for asset in runtime.pipeline.simulator.assets
-                if asset.asset_id == request.asset_id
-            )
-            anomaly_type = {
-                "bearing_wear": "bearing_wear",
-                "safety_critical_case": "bearing_wear",
-                "unclassified_case": "bearing_wear",
-                "overheat": "overheat",
-                "pressure_drop": "pressure_drop",
-            }[request.scenario]
-            anomaly = AnomalyEvent(
-                anomaly_id=f"AN-{len(runtime.pipeline.anomalies) + 1:06d}",
-                asset_id=request.asset_id,
-                detected_at=datetime.now(UTC),
-                anomaly_type=anomaly_type,
-                severity=0.8,
-                evidence={
-                    "scenario": request.scenario,
-                    "scenario_injection_fallback": True,
-                },
-            )
-            runtime.pipeline.anomalies.append(anomaly)
-            generated.append(anomaly)
-            await runtime.pipeline.events.put(
-                {"type": "anomaly", "data": anomaly.model_dump(mode="json")}
-            )
-            if runtime.pipeline.on_anomaly is not None:
-                await runtime.pipeline.on_anomaly(anomaly, asset)
+        await runtime.pipeline.events.put({"type": "scenario_started", "data": scenario})
     finally:
         runtime.pipeline.resume()
         runtime.pipeline.start()
     return {
         "asset_id": request.asset_id,
         "scenario": request.scenario,
+        "ground_truth": scenario,
         "anomalies": [_encoded(anomaly) for anomaly in generated],
+        "detected": any(anomaly.asset_id == request.asset_id for anomaly in generated),
         "pending_approvals": len(runtime.workflow.pending),
     }
+
+
+@router.get("/simulator/scenarios")
+async def active_scenarios() -> list[dict[str, Any]]:
+    return runtime.pipeline.simulator.active_scenarios()
+
+
+@router.delete("/simulator/scenarios/{asset_id}")
+async def clear_scenario(asset_id: str) -> dict[str, Any]:
+    runtime.pipeline.pause()
+    await runtime.pipeline.stop()
+    try:
+        try:
+            was_active = runtime.pipeline.simulator.clear(asset_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        event = {"asset_id": asset_id, "cleared": was_active}
+        await runtime.pipeline.events.put({"type": "scenario_cleared", "data": event})
+    finally:
+        runtime.pipeline.resume()
+        runtime.pipeline.start()
+    return event
+
+
+@router.post("/simulator/demo-workflow")
+async def inject_demo_workflow(request: DemoWorkflowRequest) -> dict[str, Any]:
+    asset = next(
+        (item for item in runtime.pipeline.simulator.assets if item.asset_id == request.asset_id),
+        None,
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    anomaly = AnomalyEvent(
+        anomaly_id=f"DEMO-{len(runtime.workflow.workflows) + 1:06d}",
+        asset_id=asset.asset_id,
+        detected_at=datetime.now(UTC),
+        anomaly_type=request.anomaly_type,
+        severity=request.severity,
+        evidence={"event_source": "workflow_demo_injection"},
+    )
+    record = await runtime.workflow.start(anomaly, asset)
+    if record["status"] == "pending_approval":
+        runtime.approvals.sla.start(record["correlation_id"])
+    result = {
+        "event_source": "workflow_demo_injection",
+        "correlation_id": record["correlation_id"],
+        "status": record["status"],
+        "approval_package": _encoded(record.get("approval_package")),
+    }
+    await runtime.workflow.events.put({"type": "workflow_demo_injected", "data": result})
+    return result
 
 
 @router.post("/simulator/pause")

@@ -21,6 +21,44 @@ def test_seeded_simulator_repeats_identically_and_emits_all_assets() -> None:
     assert len(first.generate_tick(timestamp)) == 20
 
 
+def test_scenario_has_severity_duration_seed_and_clear_controls() -> None:
+    simulator = TelemetrySimulator(seed=9, tick_seconds=0)
+    config = simulator.inject(
+        "WD-001",
+        "bearing_wear",
+        severity=0.4,
+        duration_ticks=2,
+        seed=31,
+    )
+    assert config["severity"] == 0.4
+    assert config["duration_ticks"] == 2
+    assert simulator.active_scenarios()[0]["remaining_ticks"] == 2
+    simulator.generate_tick(datetime(2026, 1, 1, tzinfo=UTC))
+    assert simulator.active_scenarios()[0]["remaining_ticks"] == 1
+    simulator.generate_tick(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=5))
+    assert simulator.active_scenarios() == []
+
+    simulator.inject("WD-001", "overheat", duration_ticks=None)
+    assert simulator.clear("WD-001") is True
+    assert simulator.active_scenarios() == []
+
+
+def test_fault_ramp_starts_at_injection_not_simulator_uptime() -> None:
+    simulator = TelemetrySimulator(seed=4, tick_seconds=0)
+    for _ in range(20):
+        simulator.generate_tick(datetime(2026, 1, 1, tzinfo=UTC))
+    simulator.inject("WD-001", "bearing_wear", severity=0.8, duration_ticks=20)
+
+    first_tick = simulator.generate_tick(datetime(2026, 1, 1, tzinfo=UTC))
+    vibration = next(
+        reading.value
+        for reading in first_tick
+        if reading.asset_id == "WD-001"
+        and reading.measurement_type == MeasurementType.VIBRATION_RMS
+    )
+    assert vibration < 2.5
+
+
 def test_normalizer_converts_units_deduplicates_and_drops_old_data() -> None:
     normalizer = TelemetryNormalizer()
     timestamp = datetime(2026, 1, 1, tzinfo=UTC)

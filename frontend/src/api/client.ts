@@ -64,6 +64,17 @@ export type Technician = {
   available: boolean;
 };
 
+export type ActiveScenario = {
+  asset_id: string;
+  scenario: string;
+  scenario_id: string;
+  severity: number;
+  duration_ticks: number | null;
+  elapsed_ticks: number;
+  remaining_ticks: number | null;
+  seed: number | null;
+};
+
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
