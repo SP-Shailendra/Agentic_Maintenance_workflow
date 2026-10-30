@@ -93,7 +93,7 @@ sequenceDiagram
   Agent-->>Human: approval package, pending decision
   Human->>Agent: approve / modify / reject / escalate
   alt approve or modify-approve
-    Agent->>Mock: update work order; commit reservations
+    Agent->>Mock: update work order, then commit reservations
   else reject
     Agent->>Mock: mark draft rejected; reserve nothing
   else escalate
