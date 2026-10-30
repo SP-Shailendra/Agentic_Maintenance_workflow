@@ -115,6 +115,8 @@ class WorkflowRunner:
         )
         record["approval_package"] = package
         record["status"] = "pending_approval"
+        record["approval_requested_at"] = now
+        record["sla_warning_sent"] = False
         self.pending[correlation_id] = package
         self._audit(record, "approval_requested", package.model_dump(mode="json"))
         await self.events.put(
@@ -285,14 +287,24 @@ class WorkflowRunner:
         started = perf_counter()
         if decision.decision == DecisionType.ESCALATE:
             package: ApprovalPackage = record["approval_package"]
+            next_tier = min(3, package.required_approver_tier + 1)
+            next_sla_minutes = {
+                1: self.settings.sla_tier1_minutes,
+                2: self.settings.sla_tier2_minutes,
+                3: self.settings.sla_tier3_minutes,
+            }[next_tier]
+            escalated_at = datetime.now(UTC)
             package = package.model_copy(
                 update={
-                    "required_approver_tier": min(3, package.required_approver_tier + 1),
-                    "sla_deadline": datetime.now(UTC) + timedelta(minutes=60),
+                    "required_approver_tier": next_tier,
+                    "sla_deadline": escalated_at + timedelta(minutes=next_sla_minutes),
                     "reasons_for_hitl": [*package.reasons_for_hitl, "escalated_by_approver"],
                 }
             )
             record["approval_package"] = package
+            record["approval_requested_at"] = escalated_at
+            record["sla_warning_sent"] = False
+            record["approval"] = decision
             self.pending[decision.correlation_id] = package
             self.feedback.append(
                 {

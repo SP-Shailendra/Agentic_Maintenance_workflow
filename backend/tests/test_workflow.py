@@ -1,9 +1,10 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.agentweave.runner import WorkflowRunner
+from app.hitl.sla import SLAMonitor
 from app.schemas.domain import (
     AnomalyEvent,
     ApprovalDecision,
@@ -156,6 +157,33 @@ def test_shadow_mode_diagnoses_without_work_order_or_approval() -> None:
         assert record["work_order"] is None
         assert record["correlation_id"] not in runner.pending
         assert not runner.cmms.work_orders
+
+    asyncio.run(run())
+
+
+def test_sla_warning_and_breach_escalation_are_audited() -> None:
+    async def run() -> None:
+        runner = WorkflowRunner()
+        record = await runner.start(make_anomaly("WD-001"), make_asset())
+        monitor = SLAMonitor(runner)
+        package = record["approval_package"]
+        warning_time = package.sla_deadline - timedelta(minutes=1)
+        assert await monitor.check(record["correlation_id"], now=warning_time) == "warning"
+        assert record["sla_warning_sent"] is True
+        assert await monitor.check(record["correlation_id"], now=warning_time) == "warning"
+        warning_events = [
+            event for event in runner.ledger.events if event.event_type == "sla_warning"
+        ]
+        assert len(warning_events) == 1
+
+        original_tier = package.required_approver_tier
+        assert await monitor.check(
+            record["correlation_id"],
+            now=package.sla_deadline + timedelta(seconds=1),
+        ) == "escalated"
+        assert record["approval_package"].required_approver_tier == original_tier + 1
+        assert record["status"] == "pending_approval"
+        assert runner.inventory.stock["BRG-101"] == 8
 
     asyncio.run(run())
 
