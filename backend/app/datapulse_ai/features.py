@@ -63,11 +63,15 @@ class FeatureEngine:
         )
         self._previous[key] = reading.value
         if reading.measurement_type == MeasurementType.VIBRATION_RMS:
-            features["fft_peaks"] = self._fft_peaks(values)
+            features["fft_peaks"] = self._fft_peaks(values, self.sample_interval_seconds)
         return features
 
     @staticmethod
-    def _fft_peaks(values: list[float], top_n: int = 3) -> list[dict[str, float]]:
+    def _fft_peaks(
+        values: list[float],
+        sample_interval_seconds: float,
+        top_n: int = 3,
+    ) -> list[dict[str, float]]:
         if len(values) < 4:
             return []
         try:
@@ -76,7 +80,7 @@ class FeatureEngine:
             return []
         samples = np.asarray(values)
         spectrum = np.abs(np.fft.rfft(samples - np.mean(samples)))
-        frequencies = np.fft.rfftfreq(len(values), d=1.0)
+        frequencies = np.fft.rfftfreq(len(values), d=sample_interval_seconds)
         indices = sorted(
             range(1, len(spectrum)),
             key=lambda index: spectrum[index],

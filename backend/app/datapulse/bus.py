@@ -23,10 +23,13 @@ class StreamBus:
 
     async def consume(self) -> AsyncIterator[TelemetryReading]:
         while True:
-            reading = await self._queue.get()
-            self.consumed += 1
-            self._queue.task_done()
-            yield reading
+            yield await self.receive()
+
+    async def receive(self) -> TelemetryReading:
+        reading = await self._queue.get()
+        self.consumed += 1
+        self._queue.task_done()
+        return reading
 
     @property
     def queue_depth(self) -> int:

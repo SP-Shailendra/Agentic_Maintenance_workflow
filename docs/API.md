@@ -17,6 +17,7 @@ In development, approval identity comes from the `X-Approver-Id` header (default
 | GET | `/workflows/{correlation_id}` | State, trace, and decisions |
 | GET | `/approvals?status=pending` | Pending packages sorted by SLA |
 | GET | `/approvals/{correlation_id}` | Approval package |
+| GET | `/technicians` | Available technicians for human-approved reassignment |
 | POST | `/approvals/{correlation_id}/decision` | Approve, modify_approve, reject, or escalate |
 | GET | `/audit?correlation_id=` | Hash-chained audit events |
 | GET | `/audit/verify` | Chain validity and first failing sequence |

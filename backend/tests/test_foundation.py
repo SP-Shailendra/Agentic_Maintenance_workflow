@@ -72,3 +72,17 @@ def test_audit_chain_verifies_and_detects_tampering() -> None:
 
     object.__setattr__(ledger._events[0], "payload", {"ok": False})
     assert ledger.verify() == (False, 1)
+
+
+def test_audit_chain_detects_deletion_and_reordering() -> None:
+    ledger = InMemoryAuditLedger()
+    for sequence in range(3):
+        ledger.append("corr-2", "system", "step", {"step": sequence})
+    ledger._events.pop()
+    assert ledger.verify() == (False, 3)
+
+    reordered = InMemoryAuditLedger()
+    for sequence in range(3):
+        reordered.append("corr-3", "system", "step", {"step": sequence})
+    reordered._events[0], reordered._events[1] = reordered._events[1], reordered._events[0]
+    assert reordered.verify() == (False, 1)

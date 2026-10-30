@@ -16,7 +16,7 @@ from app.grounding.chunker import ManualChunk
 from app.grounding.fault_codes import parse_fault_codes
 from app.grounding.retriever import ManualRetriever
 from app.grounding.validator import validate_diagnosis
-from app.llm.groq_client import FakeGroqLLM
+from app.llm.groq_client import FakeGroqLLM, GroqClientError, GroqLLM
 from app.llm.prompts import DIAGNOSIS_SYSTEM_V1, WORK_ORDER_SYSTEM_V1
 from app.schemas.domain import (
     AnomalyEvent,
@@ -39,7 +39,8 @@ class WorkflowRunner:
         self.settings = get_settings()
         self.retriever = ManualRetriever()
         self.fault_codes = parse_fault_codes()
-        self.llm = FakeGroqLLM()
+        self.llm = GroqLLM() if self.settings.llm_mode.lower() == "groq" else FakeGroqLLM()
+        self.llm_fail = False
         self.cmms = MockCMMS()
         part_seed = json.loads((root / "data" / "seed" / "parts.json").read_text(encoding="utf-8"))
         technician_seed = json.loads(
@@ -149,9 +150,12 @@ class WorkflowRunner:
                     }
                     for chunk in chunks[:3]
                 ],
-            }
+            },
+            default=str,
         )
         try:
+            if self.llm_fail:
+                raise GroqClientError("LLM failure injected")
             diagnosis = await self.llm.structured(DiagnosisResult, DIAGNOSIS_SYSTEM_V1, user)
             diagnosis = validate_diagnosis(diagnosis, chunks, set(self.fault_codes))
             outcome = (
@@ -180,6 +184,8 @@ class WorkflowRunner:
             self._trace(record, "work_order", started, "partial", "fake-deterministic")
             return None
         try:
+            if self.llm_fail:
+                raise GroqClientError("LLM failure injected")
             proposal_input = json.dumps(
                 {
                     "asset_id": asset.asset_id,
@@ -244,13 +250,17 @@ class WorkflowRunner:
                         long_lead.append(part.part_number)
                 status = PartsStatus(
                     all_available=all(item["all_available"] for item in availability),
-                    reservations=availability,
+                    availability_checks=availability,
                     long_lead=long_lead,
                 )
             except Exception as error:
                 record["partial"] = True
                 record["errors"].append(f"inventory_unavailable: {error}")
-                status = PartsStatus(all_available=False, reservations=availability, parts_tbc=True)
+                status = PartsStatus(
+                    all_available=False,
+                    availability_checks=availability,
+                    parts_tbc=True,
+                )
         self._trace(record, "parts", started, "partial" if status.parts_tbc else "ok")
         return status
 
@@ -335,18 +345,65 @@ class WorkflowRunner:
                 }
             )
         else:
-            if decision.decision == DecisionType.MODIFY_APPROVE and draft is not None:
+            if decision.decision == DecisionType.MODIFY_APPROVE:
+                if draft is None:
+                    raise ValueError("A work order is unavailable for modification")
+                modifications = decision.modifications.copy()
+                technician_id = modifications.pop("technician_id", None)
+                if technician_id:
+                    technician = next(
+                        (
+                            item
+                            for item in self.scheduler.technicians
+                            if item["technician_id"] == technician_id
+                        ),
+                        None,
+                    )
+                    required_skills = set(draft.required_skills)
+                    if (
+                        technician is None
+                        or not technician.get("available", True)
+                        or not required_skills <= set(technician.get("skills", []))
+                    ):
+                        raise ValueError(
+                            f"Technician {technician_id} is unavailable or lacks required skills"
+                        )
+                    record["technician"] = TechnicianProposal(
+                        technician_id=technician_id,
+                        name=technician["name"],
+                        skill_match=sorted(required_skills),
+                        slot_start=datetime.now(UTC) + timedelta(hours=4),
+                        rationale=(
+                            "Selected by the human approver and validated for required skills."
+                        ),
+                    )
                 draft = WorkOrderDraft.model_validate(
-                    {**draft.model_dump(), **decision.modifications}
+                    {**draft.model_dump(), **modifications}
                 )
                 record["work_order"] = draft
             if draft is not None:
+                availability = [
+                    await self.inventory.check_availability(part) for part in draft.parts
+                ]
+                unavailable = [
+                    item["part_number"] for item in availability if not item["all_available"]
+                ]
+                if unavailable:
+                    raise ValueError(
+                        f"Parts became unavailable before reservation: {', '.join(unavailable)}"
+                    )
                 if not record.get("cmms_queued"):
                     await self.cmms.update_status(record["work_order_id"], "APPROVED")
                 for part in draft.parts:
                     await self.inventory.reserve(decision.correlation_id, part)
             record["status"] = "approved"
             record["technician_assigned"] = record["technician"] is not None
+            if record["technician_assigned"]:
+                self._audit(
+                    record,
+                    "technician_assigned",
+                    {"technician": record["technician"].model_dump(mode="json")},
+                )
             if decision.decision == DecisionType.MODIFY_APPROVE:
                 self.feedback.append(
                     {

@@ -2,6 +2,7 @@
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,15 +16,27 @@ except ImportError:
         model_config = ConfigDict(extra="ignore")
 
         def __init__(self, **data: object) -> None:
+            explicit_fields = set(data)
+            env_file = type(self).model_config.get("env_file")
+            if env_file and Path(env_file).is_file():
+                for line in Path(env_file).read_text(encoding="utf-8").splitlines():
+                    key, separator, value = line.partition("=")
+                    if separator and key.strip() and not key.strip().startswith("#"):
+                        field_name = key.strip().lower()
+                        if field_name not in explicit_fields:
+                            data.setdefault(field_name, value.strip().strip("\"'"))
             for name in type(self).model_fields:
                 environment_value = os.getenv(name.upper())
-                if environment_value is not None:
-                    data.setdefault(name, environment_value)
+                if environment_value is not None and name not in explicit_fields:
+                    data[name] = environment_value
             super().__init__(**data)
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[2] / ".env",
+        extra="ignore",
+    )
 
     groq_api_key: str | None = None
     groq_model_primary: str = "openai/gpt-oss-120b"

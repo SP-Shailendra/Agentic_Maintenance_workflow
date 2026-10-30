@@ -21,6 +21,10 @@ def upgrade() -> None:
             RAISE EXCEPTION 'audit_events is append-only';
         END;
         $$ LANGUAGE plpgsql;
+        """
+    )
+    op.execute(
+        """
         CREATE TRIGGER audit_events_no_update_delete
         BEFORE UPDATE OR DELETE ON audit_events
         FOR EACH ROW EXECUTE FUNCTION reject_audit_event_mutation();

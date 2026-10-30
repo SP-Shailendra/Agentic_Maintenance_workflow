@@ -48,6 +48,8 @@ def test_workflow_waits_for_human_before_reserving_parts_and_is_idempotent() -> 
         correlation_id = pending["correlation_id"]
         assert pending["status"] == "pending_approval"
         assert pending["approval_package"].diagnosis.candidates[0].verified
+        assert pending["approval_package"].parts.reservations == []
+        assert pending["approval_package"].parts.availability_checks
         assert runner.inventory.stock["BRG-101"] == 8
         assert await runner.start(anomaly, asset) is pending
 
@@ -102,17 +104,41 @@ def test_modify_approve_persists_structured_feedback_and_commits_parts() -> None
     async def run() -> None:
         runner = WorkflowRunner()
         record = await runner.start(make_anomaly("WD-001"), make_asset())
+        runner.scheduler.technicians[2]["available"] = True
         decision = ApprovalDecision(
             correlation_id=record["correlation_id"],
             decision=DecisionType.MODIFY_APPROVE,
             approver="operator-2",
-            modifications={"priority": 1, "tasks": ["Verify the motor tag", "Inspect bearing"]},
+            modifications={
+                "priority": 1,
+                "tasks": ["Verify the motor tag", "Inspect bearing"],
+                "technician_id": "TECH-003",
+            },
         )
         await runner.decide(decision)
         assert record["status"] == "approved"
         assert record["work_order"].priority == 1
+        assert record["technician"].technician_id == "TECH-003"
         assert runner.feedback[0]["modifications"] == decision.modifications
         assert runner.inventory.stock["BRG-101"] == 7
+
+    asyncio.run(run())
+
+
+def test_modify_approve_rejects_unqualified_technician_before_reserving() -> None:
+    async def run() -> None:
+        runner = WorkflowRunner()
+        record = await runner.start(make_anomaly("WD-001"), make_asset())
+        with pytest.raises(ValueError, match="lacks required skills"):
+            await runner.decide(
+                ApprovalDecision(
+                    correlation_id=record["correlation_id"],
+                    decision=DecisionType.MODIFY_APPROVE,
+                    approver="operator-2",
+                    modifications={"technician_id": "TECH-004"},
+                )
+            )
+        assert runner.inventory.stock["BRG-101"] == 8
 
     asyncio.run(run())
 
@@ -145,6 +171,23 @@ def test_adapter_failures_create_labeled_partial_approval_package() -> None:
         assert package.partial is True
         assert package.parts.parts_tbc is True
         assert "partial_approval_package" in package.reasons_for_hitl
+
+    asyncio.run(run())
+
+
+def test_llm_failure_creates_partial_package_instead_of_failing_silently() -> None:
+    async def run() -> None:
+        runner = WorkflowRunner()
+        runner.llm_fail = True
+        record = await runner.start(make_anomaly("WD-001"), make_asset())
+        package = record["approval_package"]
+        assert record["status"] == "pending_approval"
+        assert package.partial is True
+        assert package.work_order is None
+        assert any(
+            reason.startswith("diagnosis_unavailable")
+            for reason in package.degraded_reasons
+        )
 
     asyncio.run(run())
 

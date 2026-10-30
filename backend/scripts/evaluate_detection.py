@@ -14,6 +14,7 @@ def run_evaluation() -> dict[str, float | int | str]:
         "bearing_wear": {"vibration_rms": 1.8, "temperature": 1.1},
         "overheat": {"temperature": 5.0, "current": 1.4},
         "pressure_drop": {"pressure": -1.5},
+        "capacitor_degradation": {"current": 2.5},
     }
     for asset_class, measurements in BASELINES.items():
         for measurement_type, (baseline, _) in measurements.items():

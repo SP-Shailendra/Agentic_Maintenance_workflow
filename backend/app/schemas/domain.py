@@ -110,6 +110,7 @@ class WorkOrderDraft(StrictModel):
 class PartsStatus(StrictModel):
     all_available: bool
     reservations: list[dict[str, Any]] = Field(default_factory=list)
+    availability_checks: list[dict[str, Any]] = Field(default_factory=list)
     long_lead: list[str] = Field(default_factory=list)
     parts_tbc: bool = False
 

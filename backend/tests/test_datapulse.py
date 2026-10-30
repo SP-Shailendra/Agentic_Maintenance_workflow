@@ -64,6 +64,19 @@ def test_pipeline_processes_simulated_readings() -> None:
         await runner.process_tick()
         assert len(runner.readings) == 20
         assert runner.bus.published == 20
+        assert runner.bus.consumed == 20
+
+    asyncio.run(run())
+
+
+def test_pipeline_pause_stops_background_ticks() -> None:
+    async def run() -> None:
+        runner = PipelineRunner(TelemetrySimulator(seed=2, tick_seconds=0))
+        runner.pause()
+        runner.start()
+        await asyncio.sleep(0.02)
+        await runner.stop()
+        assert runner.readings == []
 
     asyncio.run(run())
 

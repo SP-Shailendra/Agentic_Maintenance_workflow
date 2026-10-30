@@ -34,6 +34,7 @@ class PipelineRunner:
         self._task: asyncio.Task[None] | None = None
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.on_anomaly: Callable[[AnomalyEvent, Asset], Awaitable[None]] | None = None
+        self.open_work_orders_provider: Callable[[str], list[dict[str, Any]]] = lambda _: []
 
     async def process_tick(self) -> list[AnomalyEvent]:
         tick_anomalies: list[AnomalyEvent] = []
@@ -45,6 +46,7 @@ class PipelineRunner:
                 continue
             self.readings.append(normalized)
             await self.bus.publish(normalized)
+            normalized = await self.bus.receive()
             asset = next(
                 asset for asset in self.simulator.assets if asset.asset_id == reading.asset_id
             )
@@ -54,7 +56,7 @@ class PipelineRunner:
                     "asset_class": asset.asset_class,
                     "criticality_tier": asset.criticality_tier,
                     "days_since_last_pm": asset.days_since_last_pm,
-                    "open_work_orders": len(self._open_work_orders(asset.asset_id)),
+                    "open_work_orders": len(self.open_work_orders_provider(asset.asset_id)),
                 },
             )
             latest_features[asset.asset_id] = feature
@@ -108,11 +110,6 @@ class PipelineRunner:
         return tick_anomalies
 
     @staticmethod
-    def _open_work_orders(asset_id: str) -> list[dict[str, Any]]:
-        del asset_id
-        return []
-
-    @staticmethod
     def _healthy_training_data() -> dict[tuple[str, str], list[float]]:
         training: dict[tuple[str, str], list[float]] = {}
         for asset_class, measurements in BASELINES.items():
@@ -125,6 +122,9 @@ class PipelineRunner:
 
     async def _run(self) -> None:
         while True:
+            if self.simulator.paused:
+                await asyncio.sleep(min(self.simulator.tick_seconds, 0.1))
+                continue
             await self.process_tick()
             await asyncio.sleep(self.simulator.tick_seconds)
 

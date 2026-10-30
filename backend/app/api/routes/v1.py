@@ -173,6 +173,15 @@ async def get_approval(correlation_id: str) -> dict[str, Any]:
     return _encoded(package)
 
 
+@router.get("/technicians")
+async def list_technicians() -> list[dict[str, Any]]:
+    return [
+        _encoded(technician)
+        for technician in runtime.workflow.scheduler.technicians
+        if technician.get("available", True)
+    ]
+
+
 @router.post("/approvals/{correlation_id}/decision")
 async def submit_decision(
     correlation_id: str,
@@ -265,7 +274,7 @@ async def inject_scenario(request: ScenarioRequest) -> dict[str, Any]:
     except (ValueError, KeyError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     generated: list[AnomalyEvent] = []
-    for _ in range(12):
+    for _ in range(24):
         generated.extend(await runtime.pipeline.process_tick())
     return {
         "asset_id": request.asset_id,
@@ -297,7 +306,7 @@ async def reset_simulator() -> dict[str, str]:
 async def inject_failures(request: FailureRequest) -> dict[str, bool]:
     runtime.workflow.cmms.cmms_down = request.cmms_down
     runtime.workflow.inventory.inventory_down = request.inventory_down
-    runtime.workflow.llm.fail = request.llm_fail
+    runtime.workflow.llm_fail = request.llm_fail
     return request.model_dump()
 
 
