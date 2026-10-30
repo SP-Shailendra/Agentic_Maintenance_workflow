@@ -15,13 +15,19 @@ An independent, simulated maintenance-operations demo. It turns generated sensor
 ## Contents
 
 - [Architecture](#architecture)
-- [Layers](#layers)
+- [Application Components](#application-components)
+- [Data Model](#data-model)
+- [Simulator](#simulator)
+- [API Reference](#api-reference)
 - [Approval Rules](#approval-rules)
 - [LLM Use](#llm-use)
 - [Dashboard](#dashboard)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Targets](#targets)
+- [Research and Decisions](#research-and-decisions)
+- [Build Plan](#build-plan)
+- [Demo Walkthrough](#demo-walkthrough)
 - [Repository](#repository)
 - [Roadmap](#roadmap)
 
@@ -113,18 +119,189 @@ stateDiagram-v2
   rejected --> [*]
 ```
 
-### Layer Map
+## Application Components
 
 | Layer | Responsibility | Main modules |
 | --- | --- | --- |
-| L1 DataPulse | Seeded scenarios, normalization, queue bus, processing loop | `backend/app/datapulse/` |
-| L2 Features | Rolling windows, vibration peaks, health index | `backend/app/datapulse_ai/features.py` |
-| L3 Detection | SPC/CUSUM, optional Isolation Forest, ensemble, suppression | `backend/app/datapulse_ai/detection/` |
-| L4 AgentWeave | Policy, typed workflow state, LangGraph gate declaration, demo runner | `backend/app/agentweave/` |
-| L5 Grounding | Synthetic manual chunks, fault library, retrieval, citation validation | `backend/app/grounding/` |
-| L6 Adapters | CMMS, inventory, scheduling contracts and mocks | `backend/app/adapters/` |
-| L7 HITL | Approval service, SLA warning/escalation, notifier | `backend/app/hitl/` |
-| L8 Foundation | Hash ledger, SQLAlchemy metadata, Alembic, DB/checkpointer helpers | `backend/app/foundation/`, `backend/alembic/` |
+| L1 DataPulse | Synthetic sensor source, unit normalization, bounded bus, pipeline runner, and event publishing | `backend/app/datapulse/` |
+| L2 Features | Rolling windows, RMS/statistics, rate of change, vibration FFT peaks, operating context, health index | `backend/app/datapulse_ai/features.py` |
+| L3 Detection | SPC/3-sigma/CUSUM, optional Isolation Forest, weighted ensemble, quiet/dedup suppression | `backend/app/datapulse_ai/detection/`, `backend/app/datapulse_ai/model_store.py` |
+| L4 AgentWeave | Diagnosis/work-order proposal, policy, workflow state, LangGraph gate declaration, in-memory demo workflow runner | `backend/app/agentweave/` |
+| L5 Grounding | Section chunking, known fault library, asset-class filtered keyword retrieval, exact citation validator | `backend/app/grounding/` |
+| L6 Adapters | CMMS, inventory, and scheduling contracts; mocks; Maximo/SAP PM placeholders | `backend/app/adapters/` |
+| L7 HITL | Approval facade, approver identity hook, SLA warning/escalation, notifications | `backend/app/hitl/` |
+| L8 Foundation | SHA-256 audit ledger, SQLAlchemy metadata, Alembic migration, database/checkpointer helpers | `backend/app/foundation/`, `backend/alembic/` |
+
+### Backend Entry Points
+
+| Module | What it owns |
+| --- | --- |
+| `backend/app/main.py` | FastAPI application, CORS, lifespan, and versioned router registration |
+| `backend/app/config.py` | Environment configuration and repository-root `.env` loading |
+| `backend/app/runtime.py` | Process-local demo services and simulator-to-workflow callback wiring |
+| `backend/app/api/routes/v1.py` | Health/config/fleet/telemetry/anomaly/workflow/approval/audit/KPI/LLM/simulator/SSE routes |
+| `backend/app/schemas/domain.py` | Strict Pydantic domain contracts for telemetry, assets, diagnosis, orders, decisions, and audit |
+| `backend/app/agentweave/runner.py` | Offline fake-LLM workflow facade used by the API and demo script |
+| `backend/app/agentweave/graph.py` | LangGraph graph declaration with an isolated `interrupt()` gate; not the API decision-resume path yet |
+| `backend/app/foundation/models.py` | SQLAlchemy metadata for assets, telemetry, workflows, decisions, inventory, manuals, and audit |
+| `backend/app/foundation/audit_ledger.py` | In-memory canonical JSON + SHA-256 append chain and verification |
+
+### Layer Details
+
+**L1 DataPulse:** `TelemetrySimulator` generates seeded readings for five assets. `TelemetryNormalizer` converts supported units, rejects bad quality, de-duplicates, and drops out-of-order samples. `StreamBus` is a bounded in-process asyncio queue; `PipelineRunner` connects simulator, normalizer, features, detector, suppression, workflow callbacks, and SSE event queues. Simulator ticks default to five seconds; the API scenario endpoint runs a bounded 24-tick burst for fast feedback.
+
+**L2 Features:** feature windows are 1, 5, 15, and 60 minutes and report mean, standard deviation, min/max, RMS, and rate of change. Vibration features include top FFT peaks when NumPy is available. Context adds asset class, tier, days since PM, and open mock work orders. The health index is a demo score from detector outputs, not a certified equipment-health measurement.
+
+**L3 Detection:** SPC uses seeded healthy reference values to warm its baseline before simulator readings; it adds a three-sigma score and two-sided CUSUM. Isolation Forest training is optional and gracefully unavailable if scikit-learn/joblib are missing. The ensemble combines configured detector weights; suppression tracks quiet and duplicate windows. Scenario labels are not detector features. Detection records receive a `scenario_id` only after a detector event is emitted so run outcomes can be evaluated without label leakage.
+
+**L4 AgentWeave:** the demo runner retrieves manuals, asks the selected fake/Groq structured-output client for a diagnosis and work-order proposal, validates every citation/fault code, creates a draft/queued work order, performs read-only parts checks, proposes a qualified technician, and stores a pending approval package. The API currently uses this in-memory facade. A separate LangGraph `StateGraph` contains an interrupt gate, but API approvals do not yet resume that graph.
+
+**L5 Grounding:** manuals under `data/manuals/` are synthetic. `chunker.py` records document/section/fault-code metadata; `retriever.py` filters by asset class and applies keyword scoring; `validator.py` requires an allowed fault code and a citation passage present in a retrieved chunk. Local fastembed is optional; the keyword path remains available offline.
+
+**L6 Adapters:** `MockCMMS` is idempotent on correlation ID. `MockInventory.check_availability` is read-only and `reserve` is called only after approval. `MockScheduler` selects an available technician whose skills cover all required skills. Vendor classes document expected Maximo and SAP PM contracts but raise `NotImplementedError`; they do not connect to external systems.
+
+**L7 HITL:** every workflow requires a human decision. Reject and escalate require a reason. The approver identity is supplied through `X-Approver-Id` in development. SLA warnings occur at 75%; breach escalates rather than approves. The live SLA monitor is process-local and is not durable across backend restarts.
+
+**L8 Foundation:** database tables and an Alembic migration are supplied, including a database trigger blocking audit UPDATE/DELETE. The demo API uses process memory; PostgreSQL persistence and the Postgres checkpointer are not wired into the live service lifecycle. The in-memory audit chain detects mutation, deletion, and reordering during the process lifetime.
+
+## Data Model
+
+| Entity | Important fields / behavior |
+| --- | --- |
+| `TelemetryReading` | Asset/sensor, UTC timestamp, type, value/unit, quality; optional `scenario_id` is trace metadata, not a detector feature. |
+| `Asset` | Class, criticality tier, nullable safety flag; missing safety classification means safety-critical. |
+| `AnomalyEvent` | Detector event ID, asset, detected time/tick, type, severity, evidence, optional scenario correlation. |
+| `Citation` | Synthetic source document, section, and exact passage. |
+| `DiagnosisResult` | Up to three candidates, selected index, safety flag; candidates are unverified by default. |
+| `WorkOrderDraft` | Asset/site/fault, tasks/skills/parts, priority, computed cost, correlation ID. |
+| `PartsStatus` | Pre-approval availability checks, long-lead list, TBC flag; reservation list remains empty before approval. |
+| `ApprovalPackage` | Anomaly, diagnosis, draft, parts, technician, required approver tier, reasons, SLA, degraded flags. |
+| `ApprovalDecision` | Approver, approve/modify/reject/escalate, reason, structured modifications. |
+| `AuditEvent` | Sequence, actor, event/payload, previous hash, SHA-256 hash. |
+| `ScenarioRun` | Ground-truth scenario ID/start/end plus detector events, miss state, false-positive count, and detection latency. |
+
+Seed files contain `WD-001`, `WD-002`, `TG-001`, `IC-001` (safety-critical), and `IC-002` (safety classification missing), plus inventory and technician records. Part numbers in seed inventory match the synthetic manuals.
+
+## Simulator
+
+### Signal and Fault Profiles
+
+The baseline generator combines Gaussian noise with an operating cycle. Load, current, temperature, vibration, and pressure covary by asset class. Fault severity scales scenario effects. Supported profiles:
+
+| Profile | Signal behavior |
+| --- | --- |
+| `healthy` | Cyclic baseline and seeded noise; useful as a reference run. |
+| `bearing_wear` | Vibration and bearing temperature ramp upward. |
+| `intermittent_bearing` | Bearing signal ramps in repeating bursts. |
+| `recovering_bearing_wear` | Bearing wear ramps, then decays after `recovery_after_ticks`. |
+| `overheat` | Temperature and current rise together. |
+| `pressure_drop` | Pressure decreases over the scenario. |
+| `safety_critical_case` | Bearing-style fault on `IC-001`; safety routing is still determined by the asset classification. |
+| `unclassified_case` | Bearing-style fault on `IC-002`; null safety classification routes to a human. |
+| `sensor_dropout` | Omits the selected measurement. |
+| `bad_quality` | Emits the selected measurement with `quality_flag=bad`; the normalizer drops it. |
+| `out_of_order` | Alternates timestamp skew so the normalizer observes real out-of-order samples. |
+
+Scenario controls include asset, severity 0-1, duration in ticks, seed, optional targeted sensor, and optional recovery tick. Runs show active/elapsed/remaining ticks and can be cleared. Fault ramps start at injection, not process uptime. `reset(seed=...)` restarts the seeded generator. For the same seed and control sequence, replayed telemetry and scenario IDs are deterministic.
+
+### Ground Truth and Detector Output
+
+The API stores scenario ground truth as a `ScenarioRun`, separate from `AnomalyEvent` output. A detector miss stays a miss; the scenario endpoint never fabricates a detection to force the workflow path. To demonstrate approval independent of detection, use the separate `POST /simulator/demo-workflow` route, whose `event_source=workflow_demo_injection` is explicit and is not added to the detector anomaly list.
+
+`GET /simulator/runs` reports per-run detection count/state, detection latency in ticks/seconds, missed-fault status, and false-positive count within the scenario window. These are measurements on synthetic simulator data only. They are not real-world precision/recall claims. The Assets & Health telemetry chart shades active/completed injection windows for the selected asset.
+
+## API Reference
+
+Base URL: `http://localhost:8000/api/v1`; OpenAPI UI: `http://localhost:8000/docs`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/health` | Runtime liveness/mode; database is explicitly reported as not connected in demo mode. |
+| GET | `/system/config` | Non-secret models, adapters, layers, and guardrails. |
+| GET | `/assets`, `/assets/{id}` | Fleet and asset details including demo health index. |
+| GET | `/assets/{id}/telemetry?window=1h` | Readings for `1m`, `5m`, `15m`, `1h`, or `24h`. |
+| GET | `/anomalies?asset_id=&shadow=&limit=` | Detector-generated anomalies only. |
+| GET | `/anomalies/suppressed` | Suppression counts and examples. |
+| GET | `/workflows`, `/workflows/{correlation_id}` | Process-local workflow state and trace. |
+| GET | `/approvals?status=pending`, `/approvals/{correlation_id}` | Pending queue sorted by SLA and package detail. |
+| GET | `/technicians` | Available technicians for human-approved reassignment. |
+| POST | `/approvals/{correlation_id}/decision` | `approve`, `modify_approve`, `reject`, or `escalate`. |
+| GET | `/audit?correlation_id=`, `/audit/verify` | Audit events and chain verification. |
+| GET | `/kpis`, `/llm/stats` | Session KPIs and model-call metrics. |
+| POST | `/simulator/scenarios` | Inject timed ground truth; body includes asset, profile, severity, duration, seed, optional sensor/recovery fields. |
+| GET | `/simulator/scenarios`, DELETE `/simulator/scenarios/{asset_id}` | List and clear active scenario runs. |
+| GET | `/simulator/runs` | Ground-truth vs detector outcomes, misses, false positives, and delay. |
+| POST | `/simulator/demo-workflow` | Explicitly bypass detection and send a labeled demo event to approval. |
+| POST | `/simulator/pause`, `/simulator/resume`, `/simulator/reset` | Simulator controls. |
+| POST | `/simulator/failures` | Inject mock CMMS, inventory, and fake-LLM failures. |
+| GET | `/stream` | SSE telemetry, anomaly, workflow, approval, SLA, audit, and scenario events. |
+
+Decision bodies require a matching `correlation_id`; rejection and escalation require a non-empty reason. In development the route overwrites the submitted approver with `X-Approver-Id` (default `dev-approver`). This is not authentication; production needs verified OIDC/API-key identity and authorization.
+
+Example request:
+
+```json
+{
+  "correlation_id": "AN-WD-001",
+  "decision": "modify_approve",
+  "approver": "body-value-is-overridden-in-dev",
+  "reason": null,
+  "modifications": {
+    "priority": 2,
+    "tasks": ["Verify the asset tag", "Inspect the bearing"],
+    "technician_id": "TECH-001"
+  }
+}
+```
+
+SSE event names include `telemetry`, `anomaly`, `suppressed`, `workflow_step`, `approval_requested`, `approval_decided`, `sla_warning`, `sla_escalated`, `audit_event`, `scenario_started`, `scenario_cleared`, and `workflow_demo_injected`. The process-local event stream is not durable across backend restarts.
+
+## Research and Decisions
+
+| Topic | Decision / source |
+| --- | --- |
+| Groq models | Defaults are configurable `openai/gpt-oss-120b` and `openai/gpt-oss-20b`; model availability changes. See [Groq model catalog](https://console.groq.com/docs/models). The earlier Llama defaults in the project brief were scheduled for retirement on 2026-08-16. |
+| Groq structured output | Use JSON Schema responses without tool use or streaming; model output is data only. See [Groq structured outputs](https://console.groq.com/docs/structured-outputs). |
+| LangGraph interrupts | A persistent checkpointer and stable `thread_id` are required; resumed nodes restart from their beginning, so non-idempotent effects belong after the gate. See [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts). |
+| Maximo | Planned REST object structure `mxapiwodetail`, `apikey` header, `lean=1`; local adapter intentionally raises `NotImplementedError`. See [IBM Maximo REST overview](https://www.ibm.com/docs/en/masv-and-l/maximo-manage/cd?topic=overview-maximo-rest-api). |
+| SAP PM | Planned OData `API_MAINTENANCEORDER;v=2` and CSRF-token handling; local adapter is a non-operational stub. See [SAP API Business Hub](https://api.sap.com/api/API_MAINTENANCEORDER/overview). |
+| Future public validation data | CWRU, NASA IMS, XJTU-SY, and UCI AI4I 2020 are candidates for a future replay/evaluation adapter. They are not bundled or used for current scores. |
+| Reservation timing | Source notes conflict; the explicit safety rule wins: availability checks before approval, reservation commit after approval only. |
+| Ground truth | Scenario labels are kept separate from detector inputs; direct workflow demos have an explicit non-detector source. |
+| Runtime persistence | Current API services are process-local. SQLAlchemy schema and Postgres checkpointer helpers are not yet wired to live runtime state. |
+| Orchestration | The API uses the offline workflow facade today; a LangGraph interrupt/resume graph is declared but is not yet the API decision path. |
+
+Dataset references for future replay: [CWRU Bearing Data Center](https://engineering.case.edu/bearingdatacenter), [NASA Prognostics Data Repository](https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/), [XJTU-SY bearing dataset](https://doi.org/10.1016/j.ress.2019.106650), and [UCI AI4I 2020](https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset). None is currently bundled or used in the simulator benchmark.
+
+## Build Plan
+
+| Day | Gate | Deliverable |
+| --- | --- | --- |
+| 1 | Foundation | Schemas, config, policies, adapters, ledger, CI, local tooling |
+| 2 | Data | Database models/migrations and seeded plant data |
+| 3 | Data | Deterministic simulator, normalizer, bus, persisted pipeline |
+| 4 | Detection | Rolling features, health index, SPC, suppression |
+| 5 | Detection | Isolation Forest, ensemble, shadow path, evaluation report |
+| 6 | Grounding | Synthetic manuals, chunking, fault codes, keyword retrieval |
+| 7 | LLM | Groq structured outputs, strict schema, fake model, tests |
+| 8 | Agents | Diagnosis, draft work order, parts check, scheduling |
+| 9 | HITL | Graph interrupt/resume, mandatory approval, decisions |
+| 10 | HITL | SLA timers, audit coverage, feedback and KPI calculations |
+| 11 | API | REST endpoints, authentication hook, SSE |
+| 12 | Dashboard | Live shell, command center, anomalies, assets |
+| 13 | Dashboard | Approvals, trace, ledger, system, simulator |
+| 14 | Release gate | Failure injection, synthetic SLO run, docs, fresh-clone verification |
+
+Key risks are model retirement/strict-output changes, offline embedding availability, synthetic-only evaluation, and durable resume requiring PostgreSQL. The cut-list defers real OT/CMMS connectivity, LSTM, public dataset replay, MQTT, and outbound email/Teams until the current safety and persistence gates are complete. No customer or real-plant performance claim is made.
+
+## Demo Walkthrough
+
+1. **Boundary:** show the Command Center and state that all plant data and integrations are simulated/in-memory.
+2. **Detector path:** choose `IC-001`, set severity/duration/seed, inject a safety-critical fault, then review detector outcome and active scenario window.
+3. **Approval path:** open the package, inspect exact synthetic-manual citation, cost, parts availability, technician, and `safety_critical` reason. Confirm no parts were reserved yet.
+4. **Decision paths:** reject with a reason (no reservation), then approve/modify-approve another package (parts commit only afterward). Escalation also requires a reason.
+5. **Independent workflow demo:** use “Send workflow demo event” only when approval needs demonstration without a detector event; it is labeled as a direct workflow injection.
+6. **Audit:** verify the hash chain and reiterate that the live ledger is in-memory and does not survive process restart.
 
 ## Approval Rules
 
@@ -239,7 +416,7 @@ These are acceptance targets, not measured results. All available detection meas
 ├── data/
 │   ├── manuals/                 # Synthetic demo manuals
 │   └── seed/                    # Assets, inventory, technicians
-├── docs/                        # API, decisions, research, work plan, demo
+├── docs/                        # Generated synthetic detection evaluation report
 ├── frontend/
 │   └── src/                     # Typed React ops dashboard
 ├── .github/workflows/ci.yml
