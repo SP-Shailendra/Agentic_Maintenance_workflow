@@ -189,9 +189,84 @@ class FakeGroqLLM:
     ) -> T:
         del system, strict
         selected_model = model or "fake-deterministic"
+        if schema_model.__name__ == "WorkOrderProposal":
+            request = json.loads(user)
+            proposals = {
+                "WD-101": (
+                    "Inspect and replace the motor bearing",
+                    ["Lock out motor", "Inspect bearing", "Replace bearing", "Verify alignment"],
+                    ["VIB", "MECH"],
+                    [
+                        ("BRG-101", "Motor bearing assembly", 1, 145.0),
+                        ("GRS-201", "High-speed bearing grease", 1, 18.5),
+                    ],
+                ),
+                "WD-102": (
+                    "Inspect the motor cooling fan",
+                    ["Inspect fan guard", "Verify current", "Replace failed fan"],
+                    ["MECH", "ELEC"],
+                    [("FAN-301", "Cooling fan assembly", 1, 390.0)],
+                ),
+                "TG-101": (
+                    "Inspect the generator bearing",
+                    ["Isolate load", "Inspect bearing", "Verify vibration"],
+                    ["VIB", "MECH", "ELEC"],
+                    [("BRG-101", "Motor bearing assembly", 1, 145.0)],
+                ),
+                "TG-201": (
+                    "Test generator capacitor",
+                    ["De-energize generator", "Test capacitance", "Replace capacitor"],
+                    ["ELEC", "MECH"],
+                    [("CAP-601", "Generator capacitor", 1, 54.0)],
+                ),
+                "IC-101": (
+                    "Inspect chiller refrigerant pressure loss",
+                    ["Maintain cooling", "Inspect for leaks", "Repair seal", "Verify pressure"],
+                    ["HVAC", "MECH"],
+                    [
+                        ("SEAL-401", "Refrigerant seal kit", 1, 82.0),
+                        ("REF-501", "Medical chiller refrigerant", 1, 120.0),
+                    ],
+                ),
+                "IC-201": (
+                    "Inspect chiller condenser fan",
+                    [
+                        "Maintain cooling",
+                        "Inspect condenser fan",
+                        "Replace failed fan",
+                        "Validate temperature",
+                    ],
+                    ["HVAC", "ELEC", "MECH"],
+                    [("FAN-301", "Cooling fan assembly", 1, 390.0)],
+                ),
+            }
+            summary, tasks, skills, parts = proposals[request["failure_mode"]]
+            result = schema_model.model_validate(
+                {
+                    "summary": summary,
+                    "tasks": tasks,
+                    "estimated_labor_hours": 2.0,
+                    "required_skills": skills,
+                    "parts": [
+                        {
+                            "part_number": number,
+                            "description": description,
+                            "quantity": quantity,
+                            "unit_cost": cost,
+                        }
+                        for number, description, quantity, cost in parts
+                    ],
+                }
+            )
+            self.stats.append(LLMCallStat(selected_model, 0.0, 0, 0, True))
+            return result
         if schema_model is not DiagnosisResult:
             raise TypeError(f"FakeGroqLLM has no deterministic fixture for {schema_model.__name__}")
-        asset_class = (
+        try:
+            request = json.loads(user)
+        except json.JSONDecodeError:
+            request = {}
+        asset_class = request.get("asset_class") or (
             "imaging_chiller"
             if "IC-" in user
             else "testcell_generator"
@@ -213,11 +288,10 @@ class FakeGroqLLM:
         }[asset_class]
         content = {
             "imaging_chiller": (
-                "Symptoms: falling refrigerant pressure with " "rising coolant temperature."
+                "Symptoms: falling refrigerant pressure with rising coolant temperature."
             ),
             "testcell_generator": (
-                "Symptoms: vibration RMS increases with bearing temperature "
-                "during a stable load."
+                "Symptoms: vibration RMS increases with bearing temperature during a stable load."
             ),
             "wire_draw_motor": (
                 "Symptoms: rising vibration RMS with a gradual bearing-housing "
