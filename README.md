@@ -95,9 +95,9 @@ sequenceDiagram
   alt approve or modify-approve
     Agent->>Mock: update work order, then commit reservations
   else reject
-    Agent->>Mock: mark draft rejected; reserve nothing
+    Agent->>Mock: mark draft rejected, reserve nothing
   else escalate
-    Agent-->>Human: route to next tier; restart SLA
+    Agent-->>Human: route to next tier, restart SLA
   end
   Agent->>Audit: decision and finalization events
 ```
