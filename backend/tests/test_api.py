@@ -44,6 +44,18 @@ def test_scenario_creates_approval_and_records_approver() -> None:
         assert active[0]["remaining_ticks"] == 100 - active[0]["elapsed_ticks"]
         assert client.delete("/api/v1/simulator/scenarios/IC-001").json()["cleared"] is True
         assert client.get("/api/v1/simulator/scenarios").json() == []
+        run = next(
+            item
+            for item in client.get("/api/v1/simulator/runs").json()
+            if item["scenario_id"] == scenario_result["ground_truth"]["scenario_id"]
+        )
+        assert run["scenario"] == "safety_critical_case"
+        assert run["status"] == "cleared"
+        assert run["scenario_id"] == scenario_result["ground_truth"]["scenario_id"]
+        assert isinstance(run["detected"], bool)
+        assert isinstance(run["missed"], bool)
+        assert run["detection_latency_seconds"] is None or run["detection_latency_seconds"] >= 0
+        assert isinstance(run["false_positive_count"], int)
 
         demo = client.post("/api/v1/simulator/demo-workflow", json={"asset_id": "IC-001"})
         assert demo.status_code == 200
@@ -97,3 +109,62 @@ def test_sse_stream_emits_named_event_and_event_data() -> None:
                 assert next(lines).startswith("data: {\"status\": \"ok\"}")
     finally:
         runtime.pipeline.resume()
+
+
+def test_sensor_fault_scenarios_exercise_normalizer_and_keep_truth_separate() -> None:
+    with TestClient(app) as client:
+        client.post("/api/v1/simulator/reset")
+        dropout = client.post(
+            "/api/v1/simulator/scenarios",
+            json={
+                "asset_id": "WD-001",
+                "scenario": "sensor_dropout",
+                "duration_ticks": 100,
+                "measurement_type": "temperature",
+                "seed": 21,
+            },
+        ).json()
+        dropout_id = dropout["ground_truth"]["scenario_id"]
+        dropout_readings = [
+            reading
+            for reading in runtime.pipeline.readings
+            if reading.scenario_id == dropout_id
+        ]
+        assert dropout_readings
+        assert all(reading.measurement_type.value != "temperature" for reading in dropout_readings)
+        assert all(reading.scenario_id == dropout_id for reading in dropout_readings)
+        detected_for_run = [
+            anomaly
+            for anomaly in runtime.pipeline.anomalies
+            if anomaly.scenario_id == dropout_id
+        ]
+        assert all(
+            "scenario_id" not in anomaly.evidence["features"]
+            for anomaly in detected_for_run
+        )
+
+        client.post("/api/v1/simulator/reset")
+        client.post(
+            "/api/v1/simulator/scenarios",
+            json={
+                "asset_id": "WD-001",
+                "scenario": "bad_quality",
+                "duration_ticks": 100,
+                "measurement_type": "current",
+                "seed": 21,
+            },
+        )
+        assert runtime.pipeline.normalizer.dropped_bad > 0
+
+        client.post("/api/v1/simulator/reset")
+        client.post(
+            "/api/v1/simulator/scenarios",
+            json={
+                "asset_id": "WD-001",
+                "scenario": "out_of_order",
+                "duration_ticks": 100,
+                "measurement_type": "pressure",
+                "seed": 21,
+            },
+        )
+        assert runtime.pipeline.normalizer.dropped_out_of_order > 0

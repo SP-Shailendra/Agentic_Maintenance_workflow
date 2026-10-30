@@ -26,6 +26,7 @@ In development, approval identity comes from the `X-Approver-Id` header (default
 | POST | `/simulator/scenarios` | Configure a timed, seeded scenario; returns ground truth separately from detector output |
 | GET | `/simulator/scenarios` | List active scenarios and remaining ticks |
 | DELETE | `/simulator/scenarios/{asset_id}` | Clear an asset's active scenario |
+| GET | `/simulator/runs` | Ground-truth run outcomes, misses, false positives, and detection latency |
 | POST | `/simulator/demo-workflow` | Send a clearly labeled event directly to workflow approval, bypassing detection |
 | POST | `/simulator/pause` | Pause simulator loop |
 | POST | `/simulator/resume` | Resume simulator loop |
@@ -33,7 +34,7 @@ In development, approval identity comes from the `X-Approver-Id` header (default
 | POST | `/simulator/failures` | Inject CMMS, inventory, and fake-LLM failures |
 | GET | `/stream` | Server-sent event stream |
 
-Scenario injection accepts `asset_id`, `scenario`, `severity` (0-1), `duration_ticks` (default 120), and optional `seed`. Its response keeps scenario ground truth separate from `anomalies`; a detector miss remains a miss. Use `/simulator/demo-workflow` only when demonstrating the approval workflow independently of anomaly detection.
+Scenario injection accepts `asset_id`, `scenario`, `severity` (0-1), `duration_ticks` (default 120), optional `seed`, optional `measurement_type`, and optional `recovery_after_ticks`. Profiles include intermittent and recovering bearing wear, sensor dropout, bad quality, and alternating out-of-order timestamps as well as bearing wear, overheat, and pressure drop. Scenario IDs travel with telemetry but are not added to detector feature inputs. Its response keeps scenario ground truth separate from `anomalies`; a detector miss remains a miss. `/simulator/runs` reports per-run detection delay, misses, and false positives. Use `/simulator/demo-workflow` only when demonstrating approval independently of detection.
 
 ## Decision Body
 

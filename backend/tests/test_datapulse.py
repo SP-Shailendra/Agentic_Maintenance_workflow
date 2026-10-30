@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from statistics import correlation
 
 from app.datapulse.normalizer import TelemetryNormalizer
 from app.datapulse.pipeline import PipelineRunner
@@ -8,7 +9,7 @@ from app.datapulse_ai.detection.ensemble import EnsembleDetector
 from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
 from app.datapulse_ai.detection.suppression import AlertSuppressor
-from app.schemas.domain import MeasurementType, TelemetryReading
+from app.schemas.domain import MeasurementType, QualityFlag, TelemetryReading
 
 
 def test_seeded_simulator_repeats_identically_and_emits_all_assets() -> None:
@@ -19,6 +20,38 @@ def test_seeded_simulator_repeats_identically_and_emits_all_assets() -> None:
         item.model_dump() for item in second.generate_tick(timestamp)
     ]
     assert len(first.generate_tick(timestamp)) == 20
+
+
+def test_seeded_fault_replay_is_identical_across_multiple_ticks() -> None:
+    first = TelemetrySimulator(seed=4, tick_seconds=5)
+    second = TelemetrySimulator(seed=4, tick_seconds=5)
+    first_config = first.inject("WD-001", "intermittent_bearing", seed=31)
+    second_config = second.inject("WD-001", "intermittent_bearing", seed=31)
+    assert first_config["scenario_id"] == second_config["scenario_id"]
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    first_replay = [
+        [
+            reading.model_dump()
+            for reading in first.generate_tick(start + timedelta(seconds=tick * 5))
+        ]
+        for tick in range(16)
+    ]
+    second_replay = [
+        [
+            reading.model_dump()
+            for reading in second.generate_tick(start + timedelta(seconds=tick * 5))
+        ]
+        for tick in range(16)
+    ]
+    assert first_replay == second_replay
+
+
+def test_pipeline_preloads_spc_healthy_baselines_before_fault_ticks() -> None:
+    runner = PipelineRunner(TelemetrySimulator(seed=12, tick_seconds=0))
+    baseline = runner.spc._history[("wire_draw_motor", "vibration_rms")]
+    assert len(baseline) == runner.spc.baseline_size
+    score = runner.spc.score("wire_draw_motor", "vibration_rms", "WD-001", 20.0)
+    assert score > 0.9
 
 
 def test_scenario_has_severity_duration_seed_and_clear_controls() -> None:
@@ -57,6 +90,131 @@ def test_fault_ramp_starts_at_injection_not_simulator_uptime() -> None:
         and reading.measurement_type == MeasurementType.VIBRATION_RMS
     )
     assert vibration < 2.5
+
+
+def test_safety_fault_scenario_does_not_change_other_asset_signals() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    healthy = TelemetrySimulator(seed=18, tick_seconds=0)
+    injected = TelemetrySimulator(seed=18, tick_seconds=0)
+    injected.inject("IC-001", "safety_critical_case", seed=18)
+    healthy_readings = healthy.generate_tick(timestamp)
+    injected_readings = injected.generate_tick(timestamp)
+    healthy_controls = [reading for reading in healthy_readings if reading.asset_id != "IC-001"]
+    injected_controls = [reading for reading in injected_readings if reading.asset_id != "IC-001"]
+    assert [reading.model_dump() for reading in injected_controls] == [
+        reading.model_dump() for reading in healthy_controls
+    ]
+
+
+def test_operating_cycle_correlates_load_temperature_and_vibration() -> None:
+    simulator = TelemetrySimulator(
+        seed=3,
+        tick_seconds=0,
+        operating_cycle_ticks=20,
+        noise_scale=0,
+    )
+    currents: list[float] = []
+    temperatures: list[float] = []
+    vibration: list[float] = []
+    for _ in range(20):
+        readings = simulator.generate_tick(datetime(2026, 1, 1, tzinfo=UTC))
+        asset_readings = [reading for reading in readings if reading.asset_id == "TG-001"]
+        values = {reading.measurement_type: reading.value for reading in asset_readings}
+        currents.append(values[MeasurementType.CURRENT])
+        temperatures.append(values[MeasurementType.TEMPERATURE])
+        vibration.append(values[MeasurementType.VIBRATION_RMS])
+    assert correlation(currents, temperatures) > 0.95
+    assert correlation(currents, vibration) > 0.95
+
+
+def test_intermittent_and_recovering_fault_profiles_change_over_time() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    intermittent = TelemetrySimulator(seed=5, tick_seconds=0, noise_scale=0)
+    intermittent.inject(
+        "WD-001",
+        "intermittent_bearing",
+        severity=1,
+        duration_ticks=24,
+        seed=5,
+    )
+    intermittent_values = []
+    for _ in range(16):
+        tick = intermittent.generate_tick(timestamp)
+        intermittent_values.append(
+            next(
+                reading.value
+                for reading in tick
+                if reading.asset_id == "WD-001"
+                and reading.measurement_type == MeasurementType.VIBRATION_RMS
+            )
+        )
+    assert intermittent_values[9] > intermittent_values[12]
+
+    recovering = TelemetrySimulator(seed=5, tick_seconds=0, noise_scale=0)
+    recovering.inject(
+        "WD-001",
+        "recovering_bearing_wear",
+        severity=1,
+        duration_ticks=20,
+        recovery_after_ticks=8,
+    )
+    recovering_values = []
+    for _ in range(20):
+        tick = recovering.generate_tick(timestamp)
+        recovering_values.append(
+            next(
+                reading.value
+                for reading in tick
+                if reading.asset_id == "WD-001"
+                and reading.measurement_type == MeasurementType.VIBRATION_RMS
+            )
+        )
+    assert recovering_values[7] > recovering_values[-1]
+
+
+def test_sensor_fault_scenarios_emit_dropout_bad_quality_and_time_skew() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    simulator = TelemetrySimulator(seed=6, tick_seconds=5, noise_scale=0)
+    simulator.inject(
+        "WD-001", "sensor_dropout", measurement_type="temperature", duration_ticks=3
+    )
+    dropout = simulator.generate_tick(timestamp)
+    assert not any(
+        reading.asset_id == "WD-001"
+        and reading.measurement_type == MeasurementType.TEMPERATURE
+        for reading in dropout
+    )
+
+    simulator.clear("WD-001")
+    simulator.inject("WD-001", "bad_quality", measurement_type="current", duration_ticks=3)
+    bad_quality = simulator.generate_tick(timestamp + timedelta(seconds=5))
+    current_reading = next(
+        reading
+        for reading in bad_quality
+        if reading.asset_id == "WD-001"
+        and reading.measurement_type == MeasurementType.CURRENT
+    )
+    assert current_reading.quality_flag == QualityFlag.BAD
+
+    simulator.clear("WD-001")
+    simulator.inject(
+        "WD-001", "out_of_order", measurement_type="pressure", duration_ticks=3
+    )
+    first_skewed = simulator.generate_tick(timestamp + timedelta(seconds=10))
+    second_skewed = simulator.generate_tick(timestamp + timedelta(seconds=15))
+    first_timestamp = next(
+        reading.timestamp_utc
+        for reading in first_skewed
+        if reading.asset_id == "WD-001"
+        and reading.measurement_type == MeasurementType.PRESSURE
+    )
+    second_timestamp = next(
+        reading.timestamp_utc
+        for reading in second_skewed
+        if reading.asset_id == "WD-001"
+        and reading.measurement_type == MeasurementType.PRESSURE
+    )
+    assert second_timestamp < first_timestamp
 
 
 def test_normalizer_converts_units_deduplicates_and_drops_old_data() -> None:
@@ -103,6 +261,11 @@ def test_pipeline_processes_simulated_readings() -> None:
         assert len(runner.readings) == 20
         assert runner.bus.published == 20
         assert runner.bus.consumed == 20
+        assert all(
+            "scenario_id" not in reading["context"]
+            for anomaly in runner.anomalies
+            for reading in [anomaly.evidence["features"]]
+        )
 
     asyncio.run(run())
 

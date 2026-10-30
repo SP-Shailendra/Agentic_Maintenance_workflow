@@ -45,6 +45,7 @@ sensor_readings = Table(
     Column("id", Integer, primary_key=True),
     Column("asset_id", String(64), ForeignKey("assets.asset_id"), nullable=False),
     Column("sensor_id", String(100), nullable=False),
+    Column("scenario_id", String(128)),
     Column("measurement_type", String(40), nullable=False),
     Column("ts", DateTime(timezone=True), nullable=False),
     Column("value", Float, nullable=False),

@@ -73,6 +73,26 @@ export type ActiveScenario = {
   elapsed_ticks: number;
   remaining_ticks: number | null;
   seed: number | null;
+  measurement_type: string | null;
+  recovery_after_ticks: number | null;
+};
+
+export type ScenarioRun = {
+  scenario_id: string;
+  asset_id: string;
+  scenario: string;
+  severity: number;
+  duration_ticks: number | null;
+  tick_seconds: number;
+  status: string;
+  start_time_utc: string;
+  end_time_utc: string | null;
+  detected: boolean;
+  detected_count: number;
+  missed: boolean;
+  detection_latency_ticks: number | null;
+  detection_latency_seconds: number | null;
+  false_positive_count: number;
 };
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api/v1';

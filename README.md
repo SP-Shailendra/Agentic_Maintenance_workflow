@@ -161,7 +161,7 @@ Groq availability and current strict-schema constraints should be checked agains
 | Assets & Health | Fleet register and recent telemetry chart |
 | Audit Ledger | Correlation filter, hash prefixes, chain verification |
 | LLM & System | Model stats, adapters, guardrails, unmeasured SLO status |
-| Simulator | Scenario injection, pause/resume/reset, dependency failure toggles |
+| Simulator | Severity/seed/duration fault profiles, sensor/quality/time faults, active-run clearing, detection results/latency/misses/false positives, telemetry fault-window overlays, direct workflow-demo control |
 
 ## Quick Start
 

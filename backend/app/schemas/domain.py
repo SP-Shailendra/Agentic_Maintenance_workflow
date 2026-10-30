@@ -27,6 +27,7 @@ class QualityFlag(StrEnum):
 class TelemetryReading(StrictModel):
     asset_id: str
     sensor_id: str
+    scenario_id: str | None = None
     timestamp_utc: datetime
     measurement_type: MeasurementType
     value: float
@@ -54,6 +55,8 @@ class AnomalyEvent(StrictModel):
     anomaly_id: str
     asset_id: str
     detected_at: datetime
+    detected_at_tick: int | None = None
+    scenario_id: str | None = None
     anomaly_type: str
     severity: float = Field(ge=0, le=1)
     shadow: bool = False

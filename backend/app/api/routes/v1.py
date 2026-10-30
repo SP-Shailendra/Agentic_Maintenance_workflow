@@ -28,6 +28,8 @@ class ScenarioRequest(StrictRequest):
     severity: float = Field(default=0.8, ge=0, le=1)
     duration_ticks: int = Field(default=120, ge=1, le=10000)
     seed: int | None = None
+    measurement_type: str | None = None
+    recovery_after_ticks: int | None = Field(default=None, ge=0)
 
 
 class DemoWorkflowRequest(StrictRequest):
@@ -289,9 +291,20 @@ async def inject_scenario(request: ScenarioRequest) -> dict[str, Any]:
                 severity=request.severity,
                 duration_ticks=request.duration_ticks,
                 seed=request.seed,
+                measurement_type=request.measurement_type,
+                recovery_after_ticks=request.recovery_after_ticks,
             )
         except (ValueError, KeyError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        run = {
+            **scenario,
+            "start_time_utc": datetime.now(UTC).isoformat(),
+            "tick_seconds": runtime.pipeline.simulator.tick_seconds,
+            "status": "active",
+            "end_tick": None,
+            "end_time_utc": None,
+        }
+        runtime.pipeline.scenario_runs.append(run)
         for _ in range(24):
             generated.extend(await runtime.pipeline.process_tick())
         await runtime.pipeline.events.put({"type": "scenario_started", "data": scenario})
@@ -313,16 +326,70 @@ async def active_scenarios() -> list[dict[str, Any]]:
     return runtime.pipeline.simulator.active_scenarios()
 
 
+@router.get("/simulator/runs")
+async def scenario_runs() -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for run in runtime.pipeline.scenario_runs:
+        scenario_id = run["scenario_id"]
+        run_anomalies = [
+            anomaly
+            for anomaly in runtime.pipeline.anomalies
+            if anomaly.asset_id == run["asset_id"]
+            and anomaly.scenario_id == scenario_id
+            and anomaly.detected_at_tick is not None
+            and anomaly.detected_at_tick >= run["start_tick"]
+            and (run["end_tick"] is None or anomaly.detected_at_tick < run["end_tick"])
+        ]
+        false_positives = [
+            anomaly
+            for anomaly in runtime.pipeline.anomalies
+            if anomaly.asset_id == run["asset_id"]
+            and anomaly.scenario_id != scenario_id
+            and anomaly.detected_at_tick is not None
+            and anomaly.detected_at_tick >= run["start_tick"]
+            and (run["end_tick"] is None or anomaly.detected_at_tick < run["end_tick"])
+        ]
+        latency_ticks = (
+            min(anomaly.detected_at_tick for anomaly in run_anomalies) - run["start_tick"]
+            if run_anomalies
+            else None
+        )
+        is_fault = run["scenario"] != "healthy"
+        results.append(
+            {
+                **run,
+                "detected": bool(run_anomalies),
+                "detected_count": len(run_anomalies),
+                "missed": run["status"] in {"completed", "cleared"}
+                and is_fault
+                and not run_anomalies,
+                "detection_latency_ticks": latency_ticks,
+                "detection_latency_seconds": (
+                    latency_ticks * run["tick_seconds"] if latency_ticks is not None else None
+                ),
+                "false_positive_count": len(false_positives)
+                + (len(run_anomalies) if not is_fault else 0),
+            }
+        )
+    return results
+
+
 @router.delete("/simulator/scenarios/{asset_id}")
 async def clear_scenario(asset_id: str) -> dict[str, Any]:
     runtime.pipeline.pause()
     await runtime.pipeline.stop()
     try:
         try:
+            scenario_id = runtime.pipeline.simulator.scenario_ids.get(asset_id)
             was_active = runtime.pipeline.simulator.clear(asset_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         event = {"asset_id": asset_id, "cleared": was_active}
+        for run in runtime.pipeline.scenario_runs:
+            if run["scenario_id"] == scenario_id and run["status"] == "active":
+                run["status"] = "cleared"
+                run["end_tick"] = runtime.pipeline.simulator.tick
+                run["end_time_utc"] = datetime.now(UTC).isoformat()
         await runtime.pipeline.events.put({"type": "scenario_cleared", "data": event})
     finally:
         runtime.pipeline.resume()

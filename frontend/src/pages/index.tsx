@@ -5,7 +5,7 @@ import {
   Clock3, ExternalLink, Filter, RotateCw, ShieldAlert, ShieldCheck, Siren, WifiOff,
 } from 'lucide-react';
 import {
-  Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { Link } from 'react-router-dom';
 import {
@@ -15,6 +15,7 @@ import {
   type ApprovalPackage,
   type Asset,
   type AuditEvent,
+  type ScenarioRun,
   type Technician,
   type Workflow,
 } from '../api/client';
@@ -197,11 +198,36 @@ export function AssetsPage({ refreshKey }: Props) {
   const { data, loading, error } = useLoad<Asset[]>('/assets', refreshKey);
   const [selectedId, setSelectedId] = useState('');
   const selected = data?.find((asset) => asset.asset_id === selectedId) ?? data?.[0];
-  const telemetry = useLoad<Record<string, unknown>[]>(selected ? `/assets/${selected.asset_id}/telemetry?window=1h` : '/assets/none/telemetry', refreshKey);
-  const chart = (telemetry.data ?? []).slice(-120).map((reading, index) => ({ index, value: Number(reading.value), measure: String(reading.measurement_type) }));
+  const telemetryAssetId = selected?.asset_id ?? 'WD-001';
+  const telemetry = useLoad<Record<string, unknown>[]>(
+    `/assets/${telemetryAssetId}/telemetry?window=1h`,
+    refreshKey,
+  );
+  const scenarioRuns = useLoad<ScenarioRun[]>('/simulator/runs', refreshKey);
+  const chart = (telemetry.data ?? []).slice(-120).map((reading, index) => ({
+    index,
+    value: Number(reading.value),
+    timestamp: new Date(String(reading.timestamp_utc)).getTime(),
+    measure: String(reading.measurement_type),
+  }));
+  const scenarioRanges = (scenarioRuns.data ?? [])
+    .filter((run) => run.asset_id === selected?.asset_id)
+    .map((run) => {
+      const start = new Date(run.start_time_utc).getTime();
+      const end = new Date(run.end_time_utc ?? Date.now()).getTime();
+      const startIndex = chart.findIndex((point) => point.timestamp >= start);
+      let endIndex = -1;
+      for (let index = chart.length - 1; index >= 0; index -= 1) {
+        if (chart[index].timestamp <= end) { endIndex = index; break; }
+      }
+      return startIndex >= 0 && endIndex >= startIndex
+        ? { scenario_id: run.scenario_id, startIndex, endIndex }
+        : null;
+    })
+    .filter((range): range is { scenario_id: string; startIndex: number; endIndex: number } => range !== null);
   return <>
     <PageHeading eyebrow="FLEET CONDITION" title="Assets & health" subtitle="Condition index, criticality, and recent sensor readings." />
-    {loading ? <Loading /> : error ? <ErrorState message={error} /> : <div className="asset-layout"><section className="panel asset-table"><div className="section-title"><span>FLEET REGISTER</span><b>{data?.length ?? 0} ASSETS</b></div>{data?.map((asset) => <button className={`asset-choice ${selected?.asset_id === asset.asset_id ? 'selected' : ''}`} key={asset.asset_id} onClick={() => setSelectedId(asset.asset_id)}><span className="mono">{asset.asset_id}</span><span>{asset.name}</span><span className="health-value">{asset.health_index.toFixed(0)}</span></button>)}</section>{selected && <section className="asset-detail"><div className="asset-detail-head"><div><span className="section-label">{selected.site_id} / {selected.location}</span><h2>{selected.name}</h2></div><span className="health-large">{selected.health_index.toFixed(0)}<small>HEALTH</small></span></div><div className="asset-meta"><span>TIER {selected.criticality_tier}</span><span>{selected.asset_class.replaceAll('_', ' ')}</span><span>{selected.safety_critical === null ? 'CLASSIFICATION MISSING' : selected.safety_critical ? 'SAFETY CRITICAL' : 'STANDARD'}</span></div><section className="panel chart-panel"><div className="section-title"><span>RECENT TELEMETRY</span><b>{chart.length} SAMPLES</b></div>{chart.length ? <ResponsiveContainer width="100%" height={230}><LineChart data={chart}><CartesianGrid stroke="#26312c" vertical={false} /><XAxis dataKey="index" hide /><YAxis tick={{ fill: '#84928a', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#18211d', border: '1px solid #344239', borderRadius: 4 }} /><Line type="monotone" dataKey="value" stroke="#b5e85d" dot={false} isAnimationActive={false} /></LineChart></ResponsiveContainer> : <EmptyState title="No readings in this window" detail="Run the simulator to populate recent telemetry." />}</section></section>}</div>}
+    {loading ? <Loading /> : error ? <ErrorState message={error} /> : <div className="asset-layout"><section className="panel asset-table"><div className="section-title"><span>FLEET REGISTER</span><b>{data?.length ?? 0} ASSETS</b></div>{data?.map((asset) => <button className={`asset-choice ${selected?.asset_id === asset.asset_id ? 'selected' : ''}`} key={asset.asset_id} onClick={() => setSelectedId(asset.asset_id)}><span className="mono">{asset.asset_id}</span><span>{asset.name}</span><span className="health-value">{asset.health_index.toFixed(0)}</span></button>)}</section>{selected && <section className="asset-detail"><div className="asset-detail-head"><div><span className="section-label">{selected.site_id} / {selected.location}</span><h2>{selected.name}</h2></div><span className="health-large">{selected.health_index.toFixed(0)}<small>HEALTH</small></span></div><div className="asset-meta"><span>TIER {selected.criticality_tier}</span><span>{selected.asset_class.replaceAll('_', ' ')}</span><span>{selected.safety_critical === null ? 'CLASSIFICATION MISSING' : selected.safety_critical ? 'SAFETY CRITICAL' : 'STANDARD'}</span></div><section className="panel chart-panel"><div className="section-title"><span>RECENT TELEMETRY</span><b>{chart.length} SAMPLES</b></div>{chart.length ? <ResponsiveContainer width="100%" height={230}><LineChart data={chart}><CartesianGrid stroke="#26312c" vertical={false} /><XAxis dataKey="index" hide /><YAxis tick={{ fill: '#84928a', fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#18211d', border: '1px solid #344239', borderRadius: 4 }} />{scenarioRanges.map((range) => <ReferenceArea key={range.scenario_id} x1={range.startIndex} x2={range.endIndex} fill="#f0bf68" fillOpacity={0.14} stroke="#f0bf68" strokeOpacity={0.5} />)}<Line type="monotone" dataKey="value" stroke="#b5e85d" dot={false} isAnimationActive={false} /></LineChart></ResponsiveContainer> : <EmptyState title="No readings in this window" detail="Run the simulator to populate recent telemetry." />}{scenarioRanges.length > 0 && <span className="chart-legend"><i /> Shaded bands indicate injected scenario windows</span>}</section></section>}</div>}
   </>;
 }
 
@@ -238,10 +264,13 @@ export function SimulatorPage() {
   const assets = useLoad<Asset[]>('/assets');
   const [scenarioRevision, setScenarioRevision] = useState(0);
   const activeScenarios = useLoad<ActiveScenario[]>('/simulator/scenarios', scenarioRevision);
+  const scenarioRuns = useLoad<ScenarioRun[]>('/simulator/runs', scenarioRevision);
   const [selectedAsset, setSelectedAsset] = useState('WD-001');
   const [severity, setSeverity] = useState(0.8);
   const [durationTicks, setDurationTicks] = useState(120);
   const [scenarioSeed, setScenarioSeed] = useState(17);
+  const [measurementType, setMeasurementType] = useState('vibration_rms');
+  const [recoveryAfterTicks, setRecoveryAfterTicks] = useState(40);
   const [message, setMessage] = useState('');
   const [failures, setFailures] = useState({ cmms_down: false, inventory_down: false, llm_fail: false });
   async function scenario(name: string) {
@@ -254,6 +283,10 @@ export function SimulatorPage() {
           severity,
           duration_ticks: durationTicks,
           seed: scenarioSeed,
+          measurement_type: measurementType,
+          ...(name === 'recovering_bearing_wear'
+            ? { recovery_after_ticks: recoveryAfterTicks }
+            : {}),
         }),
       });
       setScenarioRevision((value) => value + 1);
@@ -298,9 +331,12 @@ export function SimulatorPage() {
       <label htmlFor="scenario-severity">Severity <output>{severity.toFixed(1)}</output><input id="scenario-severity" type="range" min="0.1" max="1" step="0.1" value={severity} onChange={(event) => setSeverity(Number(event.target.value))} /></label>
       <label htmlFor="scenario-duration">Duration in ticks<input id="scenario-duration" type="number" min="1" max="10000" value={durationTicks} onChange={(event) => setDurationTicks(Number(event.target.value))} /></label>
       <label htmlFor="scenario-seed">Random seed<input id="scenario-seed" type="number" value={scenarioSeed} onChange={(event) => setScenarioSeed(Number(event.target.value))} /></label>
+      <label htmlFor="scenario-measurement">Target sensor<select id="scenario-measurement" value={measurementType} onChange={(event) => setMeasurementType(event.target.value)}><option value="vibration_rms">Vibration RMS</option><option value="temperature">Temperature</option><option value="current">Current</option><option value="pressure">Pressure</option></select></label>
+      <label htmlFor="scenario-recovery">Recovery starts at tick<input id="scenario-recovery" type="number" min="1" max={Math.max(1, durationTicks - 1)} value={recoveryAfterTicks} onChange={(event) => setRecoveryAfterTicks(Number(event.target.value))} /></label>
     </div>
-    <section className="scenario-section"><div className="section-title"><span>LABELED SCENARIOS</span><b>DETERMINISTIC INPUTS</b></div><div className="scenario-grid">{[['healthy', 'Healthy', 'Reference operation'], ['bearing_wear', 'Bearing wear', 'Vibration + temperature drift'], ['overheat', 'Overheat', 'Temperature + current rise'], ['pressure_drop', 'Pressure drop', 'Pressure trend decreases'], ['safety_critical_case', 'Safety-critical case', 'Chiller authorization path'], ['unclassified_case', 'Unclassified case', 'Missing safety classification']].map(([value, title, detail]) => <button className="scenario-button" key={value} onClick={() => void scenario(value)}><span className="scenario-glyph"><Activity size={17} /></span><strong>{title}</strong><small>{detail}</small></button>)}</div></section>
-    <section className="scenario-section"><div className="section-title"><span>ACTIVE SCENARIOS</span><b>{activeScenarios.data?.length ?? 0} RUNNING</b></div>{activeScenarios.data?.length ? <div className="active-scenario-list">{activeScenarios.data.map((active) => <div className="active-scenario" key={active.scenario_id}><div><strong>{active.asset_id} / {active.scenario.replaceAll('_', ' ')}</strong><span>Severity {active.severity.toFixed(1)} · {active.remaining_ticks ?? '∞'} ticks remaining · seed {active.seed ?? 'default'}</span></div><button className="button button-secondary" onClick={() => void clearScenario(active.asset_id)}>Clear</button></div>)}</div> : <p className="muted-copy">No timed scenarios are active.</p>}</section>
+    <section className="scenario-section"><div className="section-title"><span>LABELED SCENARIOS</span><b>DETERMINISTIC INPUTS</b></div><div className="scenario-grid">{[['healthy', 'Healthy', 'Reference operation'], ['bearing_wear', 'Bearing wear', 'Vibration + temperature drift'], ['intermittent_bearing', 'Intermittent bearing', 'Repeating fault bursts'], ['recovering_bearing_wear', 'Recovering bearing wear', 'Fault followed by recovery'], ['overheat', 'Overheat', 'Temperature + current rise'], ['pressure_drop', 'Pressure drop', 'Pressure trend decreases'], ['safety_critical_case', 'Safety-critical case', 'Chiller authorization path'], ['unclassified_case', 'Unclassified case', 'Missing safety classification'], ['sensor_dropout', 'Sensor dropout', 'Readings disappear'], ['bad_quality', 'Bad-quality readings', 'Quality flags go bad'], ['out_of_order', 'Out-of-order timestamps', 'Time skew in selected sensor']].map(([value, title, detail]) => <button className="scenario-button" key={value} onClick={() => void scenario(value)}><span className="scenario-glyph"><Activity size={17} /></span><strong>{title}</strong><small>{detail}</small></button>)}</div></section>
+    <section className="scenario-section"><div className="section-title"><span>ACTIVE SCENARIOS</span><b>{activeScenarios.data?.length ?? 0} RUNNING</b></div>{activeScenarios.data?.length ? <div className="active-scenario-list">{activeScenarios.data.map((active) => <div className="active-scenario" key={active.scenario_id}><div><strong>{active.asset_id} / {active.scenario.replaceAll('_', ' ')}</strong><span>Severity {active.severity.toFixed(1)} · {active.remaining_ticks ?? '∞'} ticks remaining · {active.measurement_type ?? 'all sensors'} · seed {active.seed ?? 'default'}</span></div><button className="button button-secondary" onClick={() => void clearScenario(active.asset_id)}>Clear</button></div>)}</div> : <p className="muted-copy">No timed scenarios are active.</p>}</section>
+    <section className="scenario-section"><div className="section-title"><span>SCENARIO RESULTS</span><b>GROUND TRUTH VS DETECTOR</b></div>{scenarioRuns.data?.length ? <div className="table-scroll"><table><thead><tr><th>ASSET / SCENARIO</th><th>DETECTOR</th><th>DELAY</th><th>FALSE POSITIVES</th><th>RUN</th></tr></thead><tbody>{scenarioRuns.data.slice().reverse().map((run) => <tr key={run.scenario_id}><td>{run.asset_id} / {run.scenario.replaceAll('_', ' ')}</td><td>{run.detected ? `DETECTED (${run.detected_count})` : run.missed ? 'MISSED' : 'NO EVENT'}</td><td>{run.detection_latency_seconds === null ? 'N/A' : `${run.detection_latency_seconds.toFixed(1)} s`}</td><td>{run.false_positive_count}</td><td>{run.status}</td></tr>)}</tbody></table></div> : <p className="muted-copy">Inject a scenario to record detector outcomes against its ground-truth window.</p>}</section>
     <section className="scenario-section workflow-demo-section"><div><div className="section-title"><span>WORKFLOW DEMONSTRATION</span><b>SEPARATE FROM DETECTION</b></div><p className="muted-copy">Send a labeled demo event straight to approval without adding a detector anomaly.</p></div><button className="button button-primary" onClick={() => void injectWorkflowDemo()}>Send workflow demo event</button></section>
     <section className="scenario-section failure-section"><div className="section-title"><span>FAILURE INJECTION</span><b>DEGRADED-PATH TESTING</b></div><div className="failure-list">{([["cmms_down", "CMMS unavailable"], ["inventory_down", "Inventory unavailable"], ["llm_fail", "LLM unavailable"]] as const).map(([key, title]) => <label className="failure-toggle" key={key}><span><strong>{title}</strong><small>Simulate dependency failure</small></span><input type="checkbox" checked={failures[key]} onChange={() => void toggleFailure(key)} /><i /></label>)}</div></section>
     <p className="simulator-limit"><ShieldAlert size={15} />No OT connection. Scenarios affect in-memory simulator data only.</p>

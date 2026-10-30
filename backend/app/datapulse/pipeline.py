@@ -23,13 +23,16 @@ class PipelineRunner:
         self.bus = StreamBus()
         self.features = FeatureEngine()
         self.spc = SPCDetector()
+        healthy_baselines = self._healthy_training_data()
+        self.spc.fit(healthy_baselines)
         self.ensemble = EnsembleDetector()
         self.isolation_forest = IsolationForestDetector()
-        self.isolation_forest.train(self._healthy_training_data())
+        self.isolation_forest.train(healthy_baselines)
         self.suppressor = AlertSuppressor()
         self.readings: list[TelemetryReading] = []
         self.anomalies: list[AnomalyEvent] = []
         self.suppressed: list[dict[str, Any]] = []
+        self.scenario_runs: list[dict[str, Any]] = []
         self.health: dict[str, float] = {asset.asset_id: 100.0 for asset in self.simulator.assets}
         self._task: asyncio.Task[None] | None = None
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -40,6 +43,7 @@ class PipelineRunner:
         tick_anomalies: list[AnomalyEvent] = []
         latest: dict[str, dict[str, dict[str, float]]] = {}
         latest_features: dict[str, dict[str, Any]] = {}
+        latest_scenario_ids: dict[str, str | None] = {}
         for reading in self.simulator.generate_tick():
             normalized = self.normalizer.normalize(reading)
             if normalized is None:
@@ -60,6 +64,7 @@ class PipelineRunner:
                 },
             )
             latest_features[asset.asset_id] = feature
+            latest_scenario_ids[asset.asset_id] = normalized.scenario_id
             spc_score = self.spc.score(
                 asset.asset_class,
                 normalized.measurement_type.value,
@@ -96,6 +101,8 @@ class PipelineRunner:
                 anomaly_id=f"AN-{len(self.anomalies) + 1:06d}",
                 asset_id=asset_id,
                 detected_at=datetime.now(UTC),
+                detected_at_tick=max(0, self.simulator.tick - 1),
+                scenario_id=latest_scenario_ids.get(asset_id),
                 anomaly_type=detection.anomaly_type,
                 severity=detection.score,
                 shadow=False,
@@ -107,6 +114,14 @@ class PipelineRunner:
             if self.on_anomaly is not None:
                 asset = next(item for item in self.simulator.assets if item.asset_id == asset_id)
                 await self.on_anomaly(anomaly, asset)
+        active_scenario_ids = {
+            scenario["scenario_id"] for scenario in self.simulator.active_scenarios()
+        }
+        for run in self.scenario_runs:
+            if run["status"] == "active" and run["scenario_id"] not in active_scenario_ids:
+                run["status"] = "completed"
+                run["end_tick"] = self.simulator.tick
+                run["end_time_utc"] = datetime.now(UTC).isoformat()
         return tick_anomalies
 
     @staticmethod
