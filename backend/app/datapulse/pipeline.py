@@ -6,8 +6,9 @@ from typing import Any
 
 from app.datapulse.bus import StreamBus
 from app.datapulse.normalizer import TelemetryNormalizer
-from app.datapulse.simulator import TelemetrySimulator
+from app.datapulse.simulator import BASELINES, TelemetrySimulator
 from app.datapulse_ai.detection.ensemble import EnsembleDetector
+from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
 from app.datapulse_ai.detection.suppression import AlertSuppressor
 from app.datapulse_ai.features import FeatureEngine
@@ -22,6 +23,8 @@ class PipelineRunner:
         self.features = FeatureEngine()
         self.spc = SPCDetector()
         self.ensemble = EnsembleDetector()
+        self.isolation_forest = IsolationForestDetector()
+        self.isolation_forest.train(self._healthy_training_data())
         self.suppressor = AlertSuppressor()
         self.readings: list[TelemetryReading] = []
         self.anomalies: list[AnomalyEvent] = []
@@ -61,7 +64,11 @@ class PipelineRunner:
             )
             latest.setdefault(normalized.asset_id, {})[normalized.measurement_type.value] = {
                 "spc": spc_score,
-                "isolation_forest": 0.0,
+                "isolation_forest": self.isolation_forest.score(
+                    asset.asset_class,
+                    normalized.measurement_type.value,
+                    normalized.value,
+                ),
             }
             await self.events.put({"type": "telemetry", "data": normalized.model_dump(mode="json")})
         for asset_id, measurements in latest.items():
@@ -99,6 +106,17 @@ class PipelineRunner:
     def _open_work_orders(asset_id: str) -> list[dict[str, Any]]:
         del asset_id
         return []
+
+    @staticmethod
+    def _healthy_training_data() -> dict[tuple[str, str], list[float]]:
+        training: dict[tuple[str, str], list[float]] = {}
+        for asset_class, measurements in BASELINES.items():
+            for measurement_type, (baseline, _) in measurements.items():
+                spread = max(abs(baseline) * 0.015, 0.02)
+                training[(asset_class, measurement_type.value)] = [
+                    baseline + ((index % 11) - 5) * spread / 5 for index in range(100)
+                ]
+        return training
 
     async def _run(self) -> None:
         while True:

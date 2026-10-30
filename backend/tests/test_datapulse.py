@@ -5,6 +5,7 @@ from app.datapulse.normalizer import TelemetryNormalizer
 from app.datapulse.pipeline import PipelineRunner
 from app.datapulse.simulator import TelemetrySimulator
 from app.datapulse_ai.detection.ensemble import EnsembleDetector
+from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
 from app.datapulse_ai.detection.suppression import AlertSuppressor
 from app.schemas.domain import MeasurementType, TelemetryReading
@@ -65,3 +66,12 @@ def test_pipeline_processes_simulated_readings() -> None:
         assert runner.bus.published == 20
 
     asyncio.run(run())
+
+
+def test_isolation_forest_is_optional_without_declared_ml_extras() -> None:
+    detector = IsolationForestDetector()
+    result = detector.train({("test", "temperature"): [float(value) for value in range(20)]})
+    if not result:
+        assert detector.score("test", "temperature", 100.0) == 0.0
+    else:
+        assert 0.0 <= detector.score("test", "temperature", 100.0) <= 1.0
