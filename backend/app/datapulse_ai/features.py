@@ -13,9 +13,9 @@ class FeatureEngine:
 
     def __init__(self, sample_interval_seconds: float = 5.0) -> None:
         self.sample_interval_seconds = sample_interval_seconds
-        self._series: dict[
-            tuple[str, MeasurementType], deque[TelemetryReading]
-        ] = defaultdict(deque)
+        self._series: dict[tuple[str, MeasurementType], deque[TelemetryReading]] = defaultdict(
+            deque
+        )
         self._previous: dict[tuple[str, MeasurementType], float] = {}
 
     def add(
@@ -29,8 +29,7 @@ class FeatureEngine:
         series.append(reading)
         maximum = max(self.WINDOWS_SECONDS.values())
         while (
-            series
-            and (reading.timestamp_utc - series[0].timestamp_utc).total_seconds() > maximum
+            series and (reading.timestamp_utc - series[0].timestamp_utc).total_seconds() > maximum
         ):
             series.popleft()
         values = [sample.value for sample in series]

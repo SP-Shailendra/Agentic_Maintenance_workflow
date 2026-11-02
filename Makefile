@@ -1,4 +1,4 @@
-.PHONY: up down backend frontend seed simulate evaluate test lint demo
+.PHONY: up down backend frontend seed simulate evaluate baseline test lint hooks demo
 
 up:
 	docker compose up -d db
@@ -21,11 +21,17 @@ simulate:
 evaluate:
 	cd backend && python -m scripts.evaluate_detection
 
+baseline:
+	cd backend && python -m scripts.baseline_report
+
 test:
 	cd backend && python -m pytest
 
 lint:
-	cd backend && ruff check app tests scripts
+	cd backend && ruff check app tests scripts alembic
+
+hooks:
+	pre-commit run --all-files
 
 demo:
 	cd backend && python -m scripts.e2e_demo

@@ -1,6 +1,7 @@
 .env
 .venv/
 __pycache__/
+.mypy_cache/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
@@ -10,5 +11,6 @@ build/
 node_modules/
 frontend/dist/
 backend/.coverage
+backend/coverage.xml
 backend/models/
 *.log

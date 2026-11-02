@@ -11,9 +11,10 @@ def test_health_system_config_and_seeded_fleet() -> None:
         assert config["guardrails"]["human_approval_always_required"] is True
         assets = client.get("/api/v1/assets").json()
         assert len(assets) == 5
-        assert next(asset for asset in assets if asset["asset_id"] == "IC-002")[
-            "safety_critical"
-        ] is None
+        assert (
+            next(asset for asset in assets if asset["asset_id"] == "IC-002")["safety_critical"]
+            is None
+        )
 
 
 def test_scenario_creates_approval_and_records_approver() -> None:
@@ -106,7 +107,7 @@ def test_sse_stream_emits_named_event_and_event_data() -> None:
                 assert response.status_code == 200
                 lines = iter(response.iter_lines())
                 assert next(lines) == "event: health"
-                assert next(lines).startswith("data: {\"status\": \"ok\"}")
+                assert next(lines).startswith('data: {"status": "ok"}')
     finally:
         runtime.pipeline.resume()
 
@@ -126,21 +127,16 @@ def test_sensor_fault_scenarios_exercise_normalizer_and_keep_truth_separate() ->
         ).json()
         dropout_id = dropout["ground_truth"]["scenario_id"]
         dropout_readings = [
-            reading
-            for reading in runtime.pipeline.readings
-            if reading.scenario_id == dropout_id
+            reading for reading in runtime.pipeline.readings if reading.scenario_id == dropout_id
         ]
         assert dropout_readings
         assert all(reading.measurement_type.value != "temperature" for reading in dropout_readings)
         assert all(reading.scenario_id == dropout_id for reading in dropout_readings)
         detected_for_run = [
-            anomaly
-            for anomaly in runtime.pipeline.anomalies
-            if anomaly.scenario_id == dropout_id
+            anomaly for anomaly in runtime.pipeline.anomalies if anomaly.scenario_id == dropout_id
         ]
         assert all(
-            "scenario_id" not in anomaly.evidence["features"]
-            for anomaly in detected_for_run
+            "scenario_id" not in anomaly.evidence["features"] for anomaly in detected_for_run
         )
 
         client.post("/api/v1/simulator/reset")

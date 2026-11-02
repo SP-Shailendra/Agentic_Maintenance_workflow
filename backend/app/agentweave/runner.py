@@ -377,9 +377,7 @@ class WorkflowRunner:
                             "Selected by the human approver and validated for required skills."
                         ),
                     )
-                draft = WorkOrderDraft.model_validate(
-                    {**draft.model_dump(), **modifications}
-                )
+                draft = WorkOrderDraft.model_validate({**draft.model_dump(), **modifications})
                 record["work_order"] = draft
             if draft is not None:
                 availability = [

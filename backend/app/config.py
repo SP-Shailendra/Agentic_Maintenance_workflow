@@ -3,33 +3,37 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
-try:
+if TYPE_CHECKING:
     from pydantic_settings import BaseSettings, SettingsConfigDict
-except ImportError:
-    from pydantic import BaseModel, ConfigDict
+else:
+    try:
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+    except ImportError:
+        from pydantic import BaseModel, ConfigDict
 
-    def SettingsConfigDict(**kwargs: object) -> ConfigDict:
-        return ConfigDict(**kwargs)
+        def SettingsConfigDict(**kwargs: Any) -> ConfigDict:
+            return cast(ConfigDict, kwargs)
 
-    class BaseSettings(BaseModel):
-        model_config = ConfigDict(extra="ignore")
+        class BaseSettings(BaseModel):
+            model_config = ConfigDict(extra="ignore")
 
-        def __init__(self, **data: object) -> None:
-            explicit_fields = set(data)
-            env_file = type(self).model_config.get("env_file")
-            if env_file and Path(env_file).is_file():
-                for line in Path(env_file).read_text(encoding="utf-8").splitlines():
-                    key, separator, value = line.partition("=")
-                    if separator and key.strip() and not key.strip().startswith("#"):
-                        field_name = key.strip().lower()
-                        if field_name not in explicit_fields:
-                            data.setdefault(field_name, value.strip().strip("\"'"))
-            for name in type(self).model_fields:
-                environment_value = os.getenv(name.upper())
-                if environment_value is not None and name not in explicit_fields:
-                    data[name] = environment_value
-            super().__init__(**data)
+            def __init__(self, **data: Any) -> None:
+                explicit_fields = set(data)
+                env_file = type(self).model_config.get("env_file")
+                if isinstance(env_file, (str, Path)) and Path(env_file).is_file():
+                    for line in Path(env_file).read_text(encoding="utf-8").splitlines():
+                        key, separator, value = line.partition("=")
+                        if separator and key.strip() and not key.strip().startswith("#"):
+                            field_name = key.strip().lower()
+                            if field_name not in explicit_fields:
+                                data.setdefault(field_name, value.strip().strip("\"'"))
+                for name in type(self).model_fields:
+                    environment_value = os.getenv(name.upper())
+                    if environment_value is not None and name not in explicit_fields:
+                        data[name] = environment_value
+                super().__init__(**data)
 
 
 class Settings(BaseSettings):

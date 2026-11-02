@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from statistics import correlation
 
+import pytest
+
 from app.datapulse.normalizer import TelemetryNormalizer
 from app.datapulse.pipeline import PipelineRunner
 from app.datapulse.simulator import TelemetrySimulator
@@ -10,6 +12,7 @@ from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
 from app.datapulse_ai.detection.suppression import AlertSuppressor
 from app.schemas.domain import MeasurementType, QualityFlag, TelemetryReading
+from scripts.baseline_report import run_baseline
 
 
 def test_seeded_simulator_repeats_identically_and_emits_all_assets() -> None:
@@ -44,6 +47,54 @@ def test_seeded_fault_replay_is_identical_across_multiple_ticks() -> None:
         for tick in range(16)
     ]
     assert first_replay == second_replay
+
+
+def test_baseline_report_is_reproducible_for_fixed_seed() -> None:
+    assert run_baseline(ticks=12) == run_baseline(ticks=12)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Known bug: healthy cyclic signals still trigger detector events",
+)
+def test_healthy_300_ticks_have_no_post_warmup_anomalies() -> None:
+    async def run() -> list[object]:
+        runner = PipelineRunner(TelemetrySimulator(seed=17, tick_seconds=5))
+        for _ in range(300):
+            await runner.process_tick()
+        return [
+            anomaly
+            for anomaly in runner.anomalies
+            if anomaly.detected_at_tick is not None and anomaly.detected_at_tick >= 10
+        ]
+
+    assert asyncio.run(run()) == []
+
+
+@pytest.mark.xfail(strict=True, reason="Known bug: SPC baseline is shared by asset class")
+def test_spc_baseline_isolated_between_assets_of_same_class() -> None:
+    detector = SPCDetector(baseline_size=30)
+    for _ in range(30):
+        detector.score("wire_draw_motor", "current", "WD-001", 10.0)
+    wd002_scores = [detector.score("wire_draw_motor", "current", "WD-002", 20.0) for _ in range(30)]
+    assert max(wd002_scores) < 0.1
+
+
+@pytest.mark.xfail(strict=True, reason="Known bug: scenario seed resets the shared fleet RNG")
+def test_reseeding_one_asset_does_not_change_other_asset_readings() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    injected = TelemetrySimulator(seed=17, tick_seconds=0)
+    control = TelemetrySimulator(seed=17, tick_seconds=0)
+    injected.inject("WD-001", "bearing_wear", seed=31)
+    injected_readings = injected.generate_tick(timestamp)
+    control_readings = control.generate_tick(timestamp)
+    injected_other_assets = [
+        item.model_dump() for item in injected_readings if item.asset_id != "WD-001"
+    ]
+    control_other_assets = [
+        item.model_dump() for item in control_readings if item.asset_id != "WD-001"
+    ]
+    assert injected_other_assets == control_other_assets
 
 
 def test_pipeline_preloads_spc_healthy_baselines_before_fault_ticks() -> None:
@@ -175,13 +226,10 @@ def test_intermittent_and_recovering_fault_profiles_change_over_time() -> None:
 def test_sensor_fault_scenarios_emit_dropout_bad_quality_and_time_skew() -> None:
     timestamp = datetime(2026, 1, 1, tzinfo=UTC)
     simulator = TelemetrySimulator(seed=6, tick_seconds=5, noise_scale=0)
-    simulator.inject(
-        "WD-001", "sensor_dropout", measurement_type="temperature", duration_ticks=3
-    )
+    simulator.inject("WD-001", "sensor_dropout", measurement_type="temperature", duration_ticks=3)
     dropout = simulator.generate_tick(timestamp)
     assert not any(
-        reading.asset_id == "WD-001"
-        and reading.measurement_type == MeasurementType.TEMPERATURE
+        reading.asset_id == "WD-001" and reading.measurement_type == MeasurementType.TEMPERATURE
         for reading in dropout
     )
 
@@ -191,28 +239,23 @@ def test_sensor_fault_scenarios_emit_dropout_bad_quality_and_time_skew() -> None
     current_reading = next(
         reading
         for reading in bad_quality
-        if reading.asset_id == "WD-001"
-        and reading.measurement_type == MeasurementType.CURRENT
+        if reading.asset_id == "WD-001" and reading.measurement_type == MeasurementType.CURRENT
     )
     assert current_reading.quality_flag == QualityFlag.BAD
 
     simulator.clear("WD-001")
-    simulator.inject(
-        "WD-001", "out_of_order", measurement_type="pressure", duration_ticks=3
-    )
+    simulator.inject("WD-001", "out_of_order", measurement_type="pressure", duration_ticks=3)
     first_skewed = simulator.generate_tick(timestamp + timedelta(seconds=10))
     second_skewed = simulator.generate_tick(timestamp + timedelta(seconds=15))
     first_timestamp = next(
         reading.timestamp_utc
         for reading in first_skewed
-        if reading.asset_id == "WD-001"
-        and reading.measurement_type == MeasurementType.PRESSURE
+        if reading.asset_id == "WD-001" and reading.measurement_type == MeasurementType.PRESSURE
     )
     second_timestamp = next(
         reading.timestamp_utc
         for reading in second_skewed
-        if reading.asset_id == "WD-001"
-        and reading.measurement_type == MeasurementType.PRESSURE
+        if reading.asset_id == "WD-001" and reading.measurement_type == MeasurementType.PRESSURE
     )
     assert second_timestamp < first_timestamp
 
@@ -221,8 +264,12 @@ def test_normalizer_converts_units_deduplicates_and_drops_old_data() -> None:
     normalizer = TelemetryNormalizer()
     timestamp = datetime(2026, 1, 1, tzinfo=UTC)
     reading = TelemetryReading(
-        asset_id="IC-001", sensor_id="temp", timestamp_utc=timestamp,
-        measurement_type=MeasurementType.TEMPERATURE, value=68, unit="degF",
+        asset_id="IC-001",
+        sensor_id="temp",
+        timestamp_utc=timestamp,
+        measurement_type=MeasurementType.TEMPERATURE,
+        value=68,
+        unit="degF",
     )
     normalized = normalizer.normalize(reading)
     assert normalized is not None and normalized.unit == "degC" and normalized.value == 20
@@ -248,7 +295,8 @@ def test_alert_suppression_counts_duplicate_and_quiet_period() -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     assert suppressor.should_suppress("WD-001", "bearing_wear", now) == (False, None)
     assert suppressor.should_suppress("WD-001", "bearing_wear", now + timedelta(minutes=1)) == (
-        True, "duplicate_window"
+        True,
+        "duplicate_window",
     )
     assert suppressor.counts["duplicate_window"] == 1
 

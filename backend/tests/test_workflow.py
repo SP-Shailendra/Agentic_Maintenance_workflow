@@ -185,8 +185,7 @@ def test_llm_failure_creates_partial_package_instead_of_failing_silently() -> No
         assert package.partial is True
         assert package.work_order is None
         assert any(
-            reason.startswith("diagnosis_unavailable")
-            for reason in package.degraded_reasons
+            reason.startswith("diagnosis_unavailable") for reason in package.degraded_reasons
         )
 
     asyncio.run(run())
@@ -220,10 +219,13 @@ def test_sla_warning_and_breach_escalation_are_audited() -> None:
         assert len(warning_events) == 1
 
         original_tier = package.required_approver_tier
-        assert await monitor.check(
-            record["correlation_id"],
-            now=package.sla_deadline + timedelta(seconds=1),
-        ) == "escalated"
+        assert (
+            await monitor.check(
+                record["correlation_id"],
+                now=package.sla_deadline + timedelta(seconds=1),
+            )
+            == "escalated"
+        )
         assert record["approval_package"].required_approver_tier == original_tier + 1
         assert record["status"] == "pending_approval"
         assert runner.inventory.stock["BRG-101"] == 8

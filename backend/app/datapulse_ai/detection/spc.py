@@ -1,7 +1,7 @@
 """L3 three-sigma and two-sided cumulative-sum detector."""
 
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 
 class SPCDetector:
@@ -38,7 +38,7 @@ class SPCDetector:
         history.append(value)
         return min(1.0, max(z_score / self.threshold, cusum_score))
 
-    def fit(self, baselines: dict[tuple[str, str], Iterable[float]]) -> None:
+    def fit(self, baselines: Mapping[tuple[str, str], Iterable[float]]) -> None:
         """Preload SPC histories from deterministic healthy reference samples."""
         for key, values in baselines.items():
             history = self._history[key]

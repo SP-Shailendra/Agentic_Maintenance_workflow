@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.datapulse_ai.model_store import ModelStore
@@ -15,7 +15,7 @@ class IsolationForestDetector:
         self._models: dict[tuple[str, str], tuple[Any, float, float]] = {}
         self.available = True
 
-    def train(self, training: dict[tuple[str, str], Iterable[float]]) -> bool:
+    def train(self, training: Mapping[tuple[str, str], Iterable[float]]) -> bool:
         try:
             import numpy as np
             from sklearn.ensemble import IsolationForest

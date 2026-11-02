@@ -39,9 +39,7 @@ def run_evaluation() -> dict[str, float | int | str]:
     for asset_class, measurement, value, is_fault in cases:
         predicted.append(detector.score(asset_class, measurement, value) >= 0.5)
         expected.append(is_fault)
-    true_positive = sum(
-        actual and guess for actual, guess in zip(expected, predicted, strict=True)
-    )
+    true_positive = sum(actual and guess for actual, guess in zip(expected, predicted, strict=True))
     false_positive = sum(
         not actual and guess for actual, guess in zip(expected, predicted, strict=True)
     )

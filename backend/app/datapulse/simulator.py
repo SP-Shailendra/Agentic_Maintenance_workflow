@@ -113,9 +113,7 @@ class TelemetrySimulator:
         ):
             raise ValueError("recovery_after_ticks must be less than duration_ticks")
         if scenario == "recovering_bearing_wear" and recovery_after_ticks is None:
-            recovery_after_ticks = (
-                max(1, duration_ticks // 2) if duration_ticks is not None else 40
-            )
+            recovery_after_ticks = max(1, duration_ticks // 2) if duration_ticks is not None else 40
         if seed is not None:
             self.random.seed(seed)
         self.scenarios[asset_id] = scenario
@@ -200,10 +198,8 @@ class TelemetrySimulator:
             cycle_phase = 2 * math.pi * cycle_tick / self.operating_cycle_ticks
             operating_load = 0.65 + 0.35 * ((1 + math.sin(cycle_phase + asset_index * 0.6)) / 2)
             for measurement_type, (baseline, unit) in BASELINES[asset.asset_class].items():
-                if (
-                    scenario == "sensor_dropout"
-                    and measurement_type.value
-                    == (self.scenario_measurements.get(asset.asset_id) or "vibration_rms")
+                if scenario == "sensor_dropout" and measurement_type.value == (
+                    self.scenario_measurements.get(asset.asset_id) or "vibration_rms"
                 ):
                     continue
                 cycle_fraction = (operating_load - 0.65) / 0.35
@@ -247,15 +243,11 @@ class TelemetrySimulator:
                 elif scenario == "pressure_drop" and measurement_type == MeasurementType.PRESSURE:
                     value -= age * 0.3 * fault_severity
                 timestamp_utc = now
-                if (
-                    scenario == "out_of_order"
-                    and measurement_type.value
-                    == (self.scenario_measurements.get(asset.asset_id) or "vibration_rms")
+                if scenario == "out_of_order" and measurement_type.value == (
+                    self.scenario_measurements.get(asset.asset_id) or "vibration_rms"
                 ):
                     skew_direction = 1 if self.tick % 2 == 0 else -1
-                    timestamp_utc = now + timedelta(
-                        seconds=self.tick_seconds * 2 * skew_direction
-                    )
+                    timestamp_utc = now + timedelta(seconds=self.tick_seconds * 2 * skew_direction)
                 quality_flag = (
                     QualityFlag.BAD
                     if scenario == "bad_quality"

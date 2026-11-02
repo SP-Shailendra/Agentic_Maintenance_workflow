@@ -1,5 +1,7 @@
 """L1 unit normalization, quality handling, and reading deduplication."""
 
+from datetime import datetime
+
 from app.schemas.domain import MeasurementType, QualityFlag, TelemetryReading
 
 CANONICAL_UNITS = {
@@ -13,7 +15,7 @@ CANONICAL_UNITS = {
 class TelemetryNormalizer:
     def __init__(self) -> None:
         self._seen: set[tuple[str, str, str]] = set()
-        self._latest: dict[tuple[str, str], object] = {}
+        self._latest: dict[tuple[str, str], datetime] = {}
         self.dropped_bad = 0
         self.dropped_duplicate = 0
         self.dropped_out_of_order = 0

@@ -349,11 +349,10 @@ async def scenario_runs() -> list[dict[str, Any]]:
             and anomaly.detected_at_tick >= run["start_tick"]
             and (run["end_tick"] is None or anomaly.detected_at_tick < run["end_tick"])
         ]
-        latency_ticks = (
-            min(anomaly.detected_at_tick for anomaly in run_anomalies) - run["start_tick"]
-            if run_anomalies
-            else None
-        )
+        detected_ticks = [
+            tick for anomaly in run_anomalies if (tick := anomaly.detected_at_tick) is not None
+        ]
+        latency_ticks = min(detected_ticks) - run["start_tick"] if detected_ticks else None
         is_fault = run["scenario"] != "healthy"
         results.append(
             {

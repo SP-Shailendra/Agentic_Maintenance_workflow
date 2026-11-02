@@ -38,7 +38,7 @@ class InMemoryAuditLedger:
     ) -> AuditEvent:
         timestamp = timestamp_utc or datetime.now(UTC)
         previous = self._events[-1].hash if self._events else GENESIS_HASH
-        body = {
+        body: dict[str, Any] = {
             "seq": len(self._events) + 1,
             "correlation_id": correlation_id,
             "timestamp_utc": timestamp.isoformat(),

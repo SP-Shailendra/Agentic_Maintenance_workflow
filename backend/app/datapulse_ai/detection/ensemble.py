@@ -21,16 +21,17 @@ class EnsembleDetector:
         for measurement, scores in measurement_scores.items():
             total_weight = sum(self.weights.get(name, 0.0) for name in scores)
             score = (
-                sum(
-                    value * self.weights.get(name, 0.0)
-                    for name, value in scores.items()
-                )
+                sum(value * self.weights.get(name, 0.0) for name, value in scores.items())
                 / total_weight
                 if total_weight
                 else 0.0
             )
             breakdown[measurement] = score
-        dominant = max(breakdown, key=breakdown.get) if breakdown else "unknown"
+        dominant = (
+            max(breakdown, key=lambda measurement: breakdown[measurement])
+            if breakdown
+            else "unknown"
+        )
         anomaly_type = {
             "vibration_rms": "bearing_wear",
             "temperature": "overheat",

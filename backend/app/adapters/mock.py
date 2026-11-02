@@ -53,8 +53,12 @@ class MockInventory(InventoryAdapter):
         if self.inventory_down:
             raise ConnectionError("Inventory mock is unavailable")
         quantity = self.stock.get(part.part_number, 0)
-        return {"part_number": part.part_number, "requested": part.quantity, "available": quantity,
-                "all_available": quantity >= part.quantity}
+        return {
+            "part_number": part.part_number,
+            "requested": part.quantity,
+            "available": quantity,
+            "all_available": quantity >= part.quantity,
+        }
 
     async def reserve(self, correlation_id: str, part: PartRequirement) -> dict[str, Any]:
         if self.inventory_down:
