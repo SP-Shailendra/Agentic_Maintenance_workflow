@@ -1,3 +1,6 @@
+volumes:
+  maintenance_pgdata: {}
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -41,7 +44,7 @@ services:
       VITE_PIPELINE_MODE: ${PIPELINE_MODE:-live}
     ports:
       - "5173:5173"
-    command: sh -c "npm install --package-lock-only && npm ci && npm run dev -- --host 0.0.0.0"
-
-volumes:
-  maintenance_pgdata:
+    command:
+      - sh
+      - -c
+      - npm install --package-lock-only && npm ci && npm run dev -- --host 0.0.0.0
