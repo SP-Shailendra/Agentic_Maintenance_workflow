@@ -1,7 +1,7 @@
 """L4 LangGraph definition; the approval node has no pre-interrupt side effects."""
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from app.agentweave.state import WorkflowState
 
@@ -33,7 +33,7 @@ def build_graph(nodes: dict[str, WorkflowNode], *, checkpointer: Any) -> Any:
 
     builder = StateGraph(WorkflowState)
     for name in ("diagnose", "work_order", "parts", "schedule", "partial_hitl", "finalize"):
-        builder.add_node(name, nodes[name])
+        builder.add_node(name, cast(Any, nodes[name]))
     builder.add_node("hitl_gate", hitl_gate)
     builder.add_edge(START, "diagnose")
     builder.add_conditional_edges(

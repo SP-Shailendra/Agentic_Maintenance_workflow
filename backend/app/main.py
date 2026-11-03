@@ -6,14 +6,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.v1 import router
-from app.runtime import runtime
+from app.config import get_settings
+from app.runtime import Runtime
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    runtime.pipeline.start()
-    yield
-    await runtime.close()
+async def lifespan(application: FastAPI):
+    get_settings()
+    runtime = Runtime()
+    application.state.runtime = runtime
+    try:
+        runtime.pipeline.start()
+        yield
+    finally:
+        await runtime.close()
+        del application.state.runtime
 
 
 app = FastAPI(

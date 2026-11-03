@@ -1,4 +1,6 @@
 import asyncio
+import importlib.util
+import os
 from datetime import UTC, datetime, timedelta
 from statistics import correlation
 
@@ -332,3 +334,15 @@ def test_isolation_forest_is_optional_without_declared_ml_extras() -> None:
         assert detector.score("test", "temperature", 100.0) == 0.0
     else:
         assert 0.0 <= detector.score("test", "temperature", 100.0) <= 1.0
+
+
+@pytest.mark.skipif(
+    os.getenv("CI", "").lower() != "true",
+    reason="The optional-dependency availability gate runs in CI.",
+)
+def test_isolation_forest_is_installed_and_trainable_in_ci() -> None:
+    assert importlib.util.find_spec("sklearn") is not None
+    detector = IsolationForestDetector()
+    training = {("wire_draw_motor", "vibration_rms"): [1.0 + index / 100 for index in range(20)]}
+    assert detector.train(training)
+    assert detector.available

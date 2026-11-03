@@ -342,9 +342,10 @@ Groq availability and current strict-schema constraints should be checked agains
 
 ## Quick Start
 
-Requirements: Python 3.11+, Docker Desktop with the Linux container engine running, and (for local frontend development without Docker) Node.js 20+ with npm.
+Requirements: Python 3.11+, uv 0.11.23+, Docker Desktop with the Linux container engine running, and (for local frontend development without Docker) Node.js 20+ with npm.
 
 ```powershell
+make sync
 Copy-Item .env.example .env
 make up
 make seed

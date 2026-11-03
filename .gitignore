@@ -1,5 +1,7 @@
 .env
 .venv/
+.coverage
+coverage.xml
 __pycache__/
 .mypy_cache/
 *.py[cod]

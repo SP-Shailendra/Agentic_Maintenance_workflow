@@ -4,18 +4,25 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from statistics import median
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import get_settings
-from app.runtime import runtime
+from app.runtime import Runtime
 from app.schemas.domain import AnomalyEvent, ApprovalDecision
 
 router = APIRouter()
+
+
+def get_runtime(request: Request) -> Runtime:
+    return request.app.state.runtime
+
+
+RuntimeDep = Annotated[Runtime, Depends(get_runtime)]
 
 
 class StrictRequest(BaseModel):
@@ -96,7 +103,7 @@ async def system_config() -> dict[str, Any]:
 
 
 @router.get("/assets")
-async def list_assets() -> list[dict[str, Any]]:
+async def list_assets(runtime: RuntimeDep) -> list[dict[str, Any]]:
     return [
         _encoded(asset) | {"health_index": runtime.pipeline.health.get(asset.asset_id, 100.0)}
         for asset in runtime.pipeline.simulator.assets
@@ -104,7 +111,7 @@ async def list_assets() -> list[dict[str, Any]]:
 
 
 @router.get("/assets/{asset_id}")
-async def get_asset(asset_id: str) -> dict[str, Any]:
+async def get_asset(asset_id: str, runtime: RuntimeDep) -> dict[str, Any]:
     asset = next(
         (asset for asset in runtime.pipeline.simulator.assets if asset.asset_id == asset_id), None
     )
@@ -114,7 +121,12 @@ async def get_asset(asset_id: str) -> dict[str, Any]:
 
 
 @router.get("/assets/{asset_id}/telemetry")
-async def asset_telemetry(asset_id: str, window: str = "1h") -> list[dict[str, Any]]:
+async def asset_telemetry(
+    asset_id: str,
+    window: str = "1h",
+    *,
+    runtime: RuntimeDep,
+) -> list[dict[str, Any]]:
     if not any(asset.asset_id == asset_id for asset in runtime.pipeline.simulator.assets):
         raise HTTPException(status_code=404, detail="Asset not found")
     seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "24h": 86400}.get(window)
@@ -133,6 +145,8 @@ async def list_anomalies(
     asset_id: str | None = None,
     shadow: bool | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
+    *,
+    runtime: RuntimeDep,
 ) -> list[dict[str, Any]]:
     anomalies = runtime.pipeline.anomalies
     result = [
@@ -145,7 +159,7 @@ async def list_anomalies(
 
 
 @router.get("/anomalies/suppressed")
-async def suppressed_anomalies() -> dict[str, Any]:
+async def suppressed_anomalies(runtime: RuntimeDep) -> dict[str, Any]:
     return {
         "counts": runtime.pipeline.suppressor.counts,
         "events": runtime.pipeline.suppressed,
@@ -153,12 +167,15 @@ async def suppressed_anomalies() -> dict[str, Any]:
 
 
 @router.get("/workflows")
-async def list_workflows() -> list[dict[str, Any]]:
+async def list_workflows(runtime: RuntimeDep) -> list[dict[str, Any]]:
     return [_encoded(record) for record in runtime.workflow.workflows.values()]
 
 
 @router.get("/workflows/{correlation_id}")
-async def get_workflow(correlation_id: str) -> dict[str, Any]:
+async def get_workflow(
+    correlation_id: str,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
     record = runtime.workflow.workflows.get(correlation_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -166,7 +183,11 @@ async def get_workflow(correlation_id: str) -> dict[str, Any]:
 
 
 @router.get("/approvals")
-async def list_approvals(status: str = "pending") -> list[dict[str, Any]]:
+async def list_approvals(
+    status: str = "pending",
+    *,
+    runtime: RuntimeDep,
+) -> list[dict[str, Any]]:
     if status != "pending":
         return []
     packages = sorted(runtime.workflow.pending.values(), key=lambda item: item.sla_deadline)
@@ -174,7 +195,10 @@ async def list_approvals(status: str = "pending") -> list[dict[str, Any]]:
 
 
 @router.get("/approvals/{correlation_id}")
-async def get_approval(correlation_id: str) -> dict[str, Any]:
+async def get_approval(
+    correlation_id: str,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
     package = runtime.workflow.pending.get(correlation_id)
     if package is None:
         record = runtime.workflow.workflows.get(correlation_id)
@@ -185,7 +209,7 @@ async def get_approval(correlation_id: str) -> dict[str, Any]:
 
 
 @router.get("/technicians")
-async def list_technicians() -> list[dict[str, Any]]:
+async def list_technicians(runtime: RuntimeDep) -> list[dict[str, Any]]:
     return [
         _encoded(technician)
         for technician in runtime.workflow.scheduler.technicians
@@ -198,6 +222,8 @@ async def submit_decision(
     correlation_id: str,
     decision: ApprovalDecision,
     x_approver_id: str = Header(default="dev-approver"),
+    *,
+    runtime: RuntimeDep,
 ) -> dict[str, Any]:
     if decision.correlation_id != correlation_id:
         raise HTTPException(status_code=422, detail="Path and body correlation_id must match")
@@ -211,7 +237,11 @@ async def submit_decision(
 
 
 @router.get("/audit")
-async def audit_events(correlation_id: str | None = None) -> list[dict[str, Any]]:
+async def audit_events(
+    correlation_id: str | None = None,
+    *,
+    runtime: RuntimeDep,
+) -> list[dict[str, Any]]:
     events = runtime.workflow.ledger.events
     return [
         _encoded(event)
@@ -221,7 +251,7 @@ async def audit_events(correlation_id: str | None = None) -> list[dict[str, Any]
 
 
 @router.get("/audit/verify")
-async def verify_audit() -> dict[str, Any]:
+async def verify_audit(runtime: RuntimeDep) -> dict[str, Any]:
     ok, first_bad_seq = runtime.workflow.ledger.verify()
     return {
         "ok": ok,
@@ -231,7 +261,7 @@ async def verify_audit() -> dict[str, Any]:
 
 
 @router.get("/kpis")
-async def kpis() -> dict[str, Any]:
+async def kpis(runtime: RuntimeDep) -> dict[str, Any]:
     workflows = list(runtime.workflow.workflows.values())
     durations = sorted(
         entry["duration_ms"]
@@ -260,7 +290,7 @@ async def kpis() -> dict[str, Any]:
 
 
 @router.get("/llm/stats")
-async def llm_stats() -> dict[str, Any]:
+async def llm_stats(runtime: RuntimeDep) -> dict[str, Any]:
     stats = runtime.workflow.llm.stats
     latencies = sorted(stat.latency_seconds for stat in stats)
     return {
@@ -279,7 +309,10 @@ async def llm_stats() -> dict[str, Any]:
 
 
 @router.post("/simulator/scenarios")
-async def inject_scenario(request: ScenarioRequest) -> dict[str, Any]:
+async def inject_scenario(
+    request: ScenarioRequest,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
     generated: list[AnomalyEvent] = []
     runtime.pipeline.pause()
     await runtime.pipeline.stop()
@@ -322,12 +355,12 @@ async def inject_scenario(request: ScenarioRequest) -> dict[str, Any]:
 
 
 @router.get("/simulator/scenarios")
-async def active_scenarios() -> list[dict[str, Any]]:
+async def active_scenarios(runtime: RuntimeDep) -> list[dict[str, Any]]:
     return runtime.pipeline.simulator.active_scenarios()
 
 
 @router.get("/simulator/runs")
-async def scenario_runs() -> list[dict[str, Any]]:
+async def scenario_runs(runtime: RuntimeDep) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for run in runtime.pipeline.scenario_runs:
         scenario_id = run["scenario_id"]
@@ -374,7 +407,10 @@ async def scenario_runs() -> list[dict[str, Any]]:
 
 
 @router.delete("/simulator/scenarios/{asset_id}")
-async def clear_scenario(asset_id: str) -> dict[str, Any]:
+async def clear_scenario(
+    asset_id: str,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
     runtime.pipeline.pause()
     await runtime.pipeline.stop()
     try:
@@ -397,7 +433,10 @@ async def clear_scenario(asset_id: str) -> dict[str, Any]:
 
 
 @router.post("/simulator/demo-workflow")
-async def inject_demo_workflow(request: DemoWorkflowRequest) -> dict[str, Any]:
+async def inject_demo_workflow(
+    request: DemoWorkflowRequest,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
     asset = next(
         (item for item in runtime.pipeline.simulator.assets if item.asset_id == request.asset_id),
         None,
@@ -426,26 +465,29 @@ async def inject_demo_workflow(request: DemoWorkflowRequest) -> dict[str, Any]:
 
 
 @router.post("/simulator/pause")
-async def pause_simulator() -> dict[str, str]:
+async def pause_simulator(runtime: RuntimeDep) -> dict[str, str]:
     runtime.pipeline.pause()
     return {"status": "paused"}
 
 
 @router.post("/simulator/resume")
-async def resume_simulator() -> dict[str, str]:
+async def resume_simulator(runtime: RuntimeDep) -> dict[str, str]:
     runtime.pipeline.resume()
     runtime.pipeline.start()
     return {"status": "running"}
 
 
 @router.post("/simulator/reset")
-async def reset_simulator() -> dict[str, str]:
+async def reset_simulator(runtime: RuntimeDep) -> dict[str, str]:
     await runtime.reset()
     return {"status": "reset"}
 
 
 @router.post("/simulator/failures")
-async def inject_failures(request: FailureRequest) -> dict[str, bool]:
+async def inject_failures(
+    request: FailureRequest,
+    runtime: RuntimeDep,
+) -> dict[str, bool]:
     runtime.workflow.cmms.cmms_down = request.cmms_down
     runtime.workflow.inventory.inventory_down = request.inventory_down
     runtime.workflow.llm_fail = request.llm_fail
@@ -453,7 +495,7 @@ async def inject_failures(request: FailureRequest) -> dict[str, bool]:
 
 
 @router.get("/stream")
-async def event_stream() -> StreamingResponse:
+async def event_stream(runtime: RuntimeDep) -> StreamingResponse:
     async def generate():
         queues = (runtime.pipeline.events, runtime.workflow.events)
         while True:

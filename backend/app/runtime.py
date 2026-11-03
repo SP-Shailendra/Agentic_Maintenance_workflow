@@ -43,6 +43,3 @@ class Runtime:
         self._wire_pipeline()
         self.pipeline.pause()
         self.pipeline.start()
-
-
-runtime = Runtime()

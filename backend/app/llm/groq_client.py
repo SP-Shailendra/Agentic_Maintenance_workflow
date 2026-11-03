@@ -151,7 +151,8 @@ class GroqLLM:
             if strict
             else {"type": "json_object"}
         )
-        result = self._client.chat.completions.create(
+        client: Any = self._client
+        result = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format=response_format,

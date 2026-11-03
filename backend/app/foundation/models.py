@@ -1,5 +1,7 @@
 """L8 PostgreSQL schema for telemetry, workflow state, approvals, and audit."""
 
+from typing import Any
+
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -17,10 +19,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
+_Vector: Any
 try:
-    from pgvector.sqlalchemy import Vector
+    from pgvector.sqlalchemy import Vector as _Vector
 except ImportError:
-    Vector = None
+    _Vector = None
 
 metadata = MetaData()
 json_type = JSONB().with_variant(JSON(), "sqlite")
@@ -225,7 +228,7 @@ manual_chunks = Table(
     Column("document", String(255), nullable=False),
     Column("section", String(255), nullable=False),
     Column("content", Text, nullable=False),
-    Column("embedding", Vector(384) if Vector else JSON),
+    Column("embedding", _Vector(384) if _Vector is not None else JSON),
 )
 
 kpi_snapshots = Table(

@@ -1,7 +1,31 @@
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from app.config import get_settings
 from app.main import app
-from app.runtime import runtime
+
+
+def test_runtime_is_recreated_for_each_app_lifespan() -> None:
+    with TestClient(app):
+        first_runtime = app.state.runtime
+        assert first_runtime.pipeline._task is not None
+
+    with TestClient(app):
+        second_runtime = app.state.runtime
+        assert second_runtime is not first_runtime
+        assert second_runtime.pipeline._task is not None
+
+
+def test_invalid_settings_fail_fast_during_startup(monkeypatch) -> None:
+    monkeypatch.setenv("HITL_MIN_CONFIDENCE", "not-a-number")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValidationError):
+            with TestClient(app):
+                pass
+    finally:
+        get_settings.cache_clear()
 
 
 def test_health_system_config_and_seeded_fleet() -> None:
@@ -19,6 +43,7 @@ def test_health_system_config_and_seeded_fleet() -> None:
 
 def test_scenario_creates_approval_and_records_approver() -> None:
     with TestClient(app) as client:
+        runtime = app.state.runtime
         client.post("/api/v1/simulator/reset")
         result = client.post(
             "/api/v1/simulator/scenarios",
@@ -95,25 +120,27 @@ def test_scenario_creates_approval_and_records_approver() -> None:
 
 
 def test_sse_stream_emits_named_event_and_event_data() -> None:
-    while not runtime.pipeline.events.empty():
-        runtime.pipeline.events.get_nowait()
-    while not runtime.workflow.events.empty():
-        runtime.workflow.events.get_nowait()
-    runtime.pipeline.pause()
-    runtime.workflow.events.put_nowait({"type": "health", "data": {"status": "ok"}})
-    try:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        while not runtime.pipeline.events.empty():
+            runtime.pipeline.events.get_nowait()
+        while not runtime.workflow.events.empty():
+            runtime.workflow.events.get_nowait()
+        runtime.pipeline.pause()
+        runtime.workflow.events.put_nowait({"type": "health", "data": {"status": "ok"}})
+        try:
             with client.stream("GET", "/api/v1/stream") as response:
                 assert response.status_code == 200
                 lines = iter(response.iter_lines())
                 assert next(lines) == "event: health"
                 assert next(lines).startswith('data: {"status": "ok"}')
-    finally:
-        runtime.pipeline.resume()
+        finally:
+            runtime.pipeline.resume()
 
 
 def test_sensor_fault_scenarios_exercise_normalizer_and_keep_truth_separate() -> None:
     with TestClient(app) as client:
+        runtime = app.state.runtime
         client.post("/api/v1/simulator/reset")
         dropout = client.post(
             "/api/v1/simulator/scenarios",

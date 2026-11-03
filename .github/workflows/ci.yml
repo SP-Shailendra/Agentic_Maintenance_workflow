@@ -12,15 +12,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade pip setuptools
-      - run: pip install -e "backend[dev]"
-      - run: pre-commit run --all-files
-      - run: ruff check backend/app backend/tests backend/scripts backend/alembic
-      - run: mypy app
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.23"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --locked --extra dev --project backend
+      - run: uv run --locked --project backend pre-commit run --all-files
+      - run: uv run --locked --project backend ruff check backend/app backend/tests backend/scripts backend/alembic
+      - run: uv run --locked mypy app
         working-directory: backend
-      - run: pytest tests --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml
+      - run: uv run --locked pytest tests --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml
         working-directory: backend
-      - run: python -m scripts.baseline_report
+      - run: uv run --locked python -m scripts.baseline_report
         working-directory: backend
       - uses: actions/upload-artifact@v4
         if: always()
@@ -34,7 +38,7 @@ jobs:
           name: detection-baseline
           path: docs/BASELINE.md
           if-no-files-found: warn
-      - run: pip-audit --skip-editable
+      - run: uv run --locked --project backend pip-audit --skip-editable
       - run: docker build -f backend/Dockerfile -t agentic-maintenance-workflow:ci .
       - uses: aquasecurity/trivy-action@0.28.0
         with:

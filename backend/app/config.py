@@ -1,39 +1,11 @@
 """Environment-backed configuration for the workflow and local demo."""
 
-import os
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Literal
 
-if TYPE_CHECKING:
-    from pydantic_settings import BaseSettings, SettingsConfigDict
-else:
-    try:
-        from pydantic_settings import BaseSettings, SettingsConfigDict
-    except ImportError:
-        from pydantic import BaseModel, ConfigDict
-
-        def SettingsConfigDict(**kwargs: Any) -> ConfigDict:
-            return cast(ConfigDict, kwargs)
-
-        class BaseSettings(BaseModel):
-            model_config = ConfigDict(extra="ignore")
-
-            def __init__(self, **data: Any) -> None:
-                explicit_fields = set(data)
-                env_file = type(self).model_config.get("env_file")
-                if isinstance(env_file, (str, Path)) and Path(env_file).is_file():
-                    for line in Path(env_file).read_text(encoding="utf-8").splitlines():
-                        key, separator, value = line.partition("=")
-                        if separator and key.strip() and not key.strip().startswith("#"):
-                            field_name = key.strip().lower()
-                            if field_name not in explicit_fields:
-                                data.setdefault(field_name, value.strip().strip("\"'"))
-                for name in type(self).model_fields:
-                    environment_value = os.getenv(name.upper())
-                    if environment_value is not None and name not in explicit_fields:
-                        data[name] = environment_value
-                super().__init__(**data)
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -43,25 +15,28 @@ class Settings(BaseSettings):
     )
 
     groq_api_key: str | None = None
-    groq_model_primary: str = "openai/gpt-oss-120b"
-    groq_model_fast: str = "openai/gpt-oss-20b"
-    groq_timeout_seconds: float = 30
-    groq_max_retries: int = 3
-    llm_mode: str = "fake"
-    database_url: str = "postgresql+asyncpg://maintenance:maintenance@localhost:5432/maintenance"
-    hitl_min_confidence: float = 0.70
-    spend_approval_threshold_usd: float = 5000
-    alert_quiet_period_minutes: int = 5
-    alert_dedup_window_minutes: int = 15
-    sla_tier1_minutes: int = 15
-    sla_tier2_minutes: int = 60
-    sla_tier3_minutes: int = 240
-    pipeline_mode: str = "live"
-    cmms_adapter: str = "mock"
-    inventory_adapter: str = "mock"
-    scheduler_adapter: str = "mock"
-    labor_rate_usd_per_hour: float = 110
-    vite_api_base_url: str = "http://localhost:8000/api/v1"
+    groq_model_primary: str = Field(default="openai/gpt-oss-120b", min_length=1)
+    groq_model_fast: str = Field(default="openai/gpt-oss-20b", min_length=1)
+    groq_timeout_seconds: float = Field(default=30, gt=0)
+    groq_max_retries: int = Field(default=3, ge=0, le=10)
+    llm_mode: Literal["fake", "groq"] = "fake"
+    database_url: str = Field(
+        default="postgresql+asyncpg://maintenance:maintenance@localhost:5432/maintenance",
+        min_length=1,
+    )
+    hitl_min_confidence: float = Field(default=0.70, ge=0, le=1)
+    spend_approval_threshold_usd: float = Field(default=5000, ge=0)
+    alert_quiet_period_minutes: int = Field(default=5, ge=0)
+    alert_dedup_window_minutes: int = Field(default=15, ge=0)
+    sla_tier1_minutes: int = Field(default=15, gt=0)
+    sla_tier2_minutes: int = Field(default=60, gt=0)
+    sla_tier3_minutes: int = Field(default=240, gt=0)
+    pipeline_mode: Literal["live", "shadow"] = "live"
+    cmms_adapter: Literal["mock", "maximo", "sap_pm"] = "mock"
+    inventory_adapter: Literal["mock"] = "mock"
+    scheduler_adapter: Literal["mock"] = "mock"
+    labor_rate_usd_per_hour: float = Field(default=110, ge=0)
+    vite_api_base_url: str = Field(default="http://localhost:8000/api/v1", min_length=1)
 
 
 @lru_cache
