@@ -1,17 +1,22 @@
 """HTTP and SSE API for the simulated maintenance workflow."""
 
 import asyncio
+import csv
+import io
 import json
 from datetime import UTC, datetime, timedelta
 from statistics import median
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import get_settings
+from app.datapulse.configuration import AssetParameters, SimulatorConfiguration
 from app.runtime import Runtime
 from app.schemas.domain import AnomalyEvent, ApprovalDecision
 
@@ -37,6 +42,36 @@ class ScenarioRequest(StrictRequest):
     seed: int | None = None
     measurement_type: str | None = None
     recovery_after_ticks: int | None = Field(default=None, ge=0)
+
+
+class SensorFaultRequest(StrictRequest):
+    asset_id: str
+    fault: Literal[
+        "spike",
+        "stuck_at",
+        "flat_line",
+        "dropout",
+        "bias_step",
+        "noise_increase",
+        "unit_flip",
+        "swapped_channels",
+        "bad_quality",
+        "out_of_order",
+    ]
+    severity: float = Field(default=0.8, ge=0, le=1)
+    duration_ticks: int = Field(default=120, ge=1, le=10000)
+    seed: int | None = None
+    measurement_type: str = "vibration_rms"
+
+
+class SimulatorSpeedRequest(StrictRequest):
+    speed: Literal[1, 10, 100, "max"]
+
+
+class AssetParametersRequest(StrictRequest):
+    baseline_scale: float = Field(gt=0)
+    load_scale: float = Field(gt=0)
+    thermal_time_constant_scale: float = Field(gt=0)
 
 
 class DemoWorkflowRequest(StrictRequest):
@@ -354,6 +389,133 @@ async def inject_scenario(
     }
 
 
+@router.post("/simulator/sensor-faults")
+async def inject_sensor_fault(
+    request: SensorFaultRequest,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
+    scenario = (
+        request.fault
+        if request.fault in {"bad_quality", "out_of_order"}
+        else f"sensor_{request.fault}"
+    )
+    return await inject_scenario(
+        ScenarioRequest(
+            asset_id=request.asset_id,
+            scenario=scenario,
+            severity=request.severity,
+            duration_ticks=request.duration_ticks,
+            seed=request.seed,
+            measurement_type=request.measurement_type,
+        ),
+        runtime,
+    )
+
+
+@router.get("/simulator/config")
+async def simulator_config(runtime: RuntimeDep) -> dict[str, Any]:
+    simulator = runtime.pipeline.simulator
+    return {
+        "config_hash": simulator.config_hash,
+        "master_seed": simulator.master_seed,
+        "tick_seconds": simulator.tick_seconds,
+        "operating_cycle_ticks": simulator.operating_cycle_ticks,
+        "speed": simulator.clock.speed,
+        "configuration": simulator.configuration.model_dump(mode="json"),
+    }
+
+
+@router.post("/simulator/config/reload")
+async def reload_simulator_config(runtime: RuntimeDep) -> dict[str, Any]:
+    config_hash = await runtime.reload_simulator_configuration()
+    return {
+        "status": "reloaded",
+        "config_hash": config_hash,
+        "master_seed": runtime.pipeline.simulator.master_seed,
+    }
+
+
+@router.put("/simulator/config")
+async def update_simulator_config(
+    configuration: SimulatorConfiguration,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
+    config_hash = await runtime.apply_simulator_configuration(configuration, persist=True)
+    runtime.workflow.ledger.append(
+        f"SIMCFG-{config_hash[:16]}",
+        "operator",
+        "simulator_config_updated",
+        {"master_seed": configuration.master_seed, "config_hash": config_hash},
+    )
+    return {
+        "status": "updated",
+        "master_seed": configuration.master_seed,
+        "config_hash": config_hash,
+    }
+
+
+@router.post("/simulator/speed")
+async def set_simulator_speed(
+    request: SimulatorSpeedRequest,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
+    try:
+        runtime.pipeline.simulator.clock.set_speed(request.speed)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "speed": runtime.pipeline.simulator.clock.speed,
+        "sleep_seconds": runtime.pipeline.simulator.clock.sleep_seconds,
+    }
+
+
+@router.post("/simulator/assets/{asset_id}/parameters")
+async def update_asset_parameters(
+    asset_id: str,
+    request: AssetParametersRequest,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
+    simulator = runtime.pipeline.simulator
+    if not any(asset.asset_id == asset_id for asset in simulator.assets):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    previous = simulator.configuration.asset_parameters.get(asset_id, AssetParameters())
+    config_data = simulator.configuration.model_dump()
+    config_data["asset_parameters"][asset_id] = request.model_dump()
+    configuration = SimulatorConfiguration.model_validate(config_data)
+    config_hash = await runtime.apply_simulator_configuration(configuration, persist=True)
+    runtime._simulator_parameter_undo[asset_id] = previous
+    runtime.workflow.ledger.append(
+        f"SIMCFG-{config_hash[:16]}",
+        "operator",
+        "simulator_asset_parameters_updated",
+        {
+            "asset_id": asset_id,
+            "previous": previous.model_dump(),
+            "updated": request.model_dump(),
+            "config_hash": config_hash,
+        },
+    )
+    return {"asset_id": asset_id, "parameters": request.model_dump(), "config_hash": config_hash}
+
+
+@router.post("/simulator/assets/{asset_id}/parameters/undo")
+async def undo_asset_parameters(asset_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    previous = runtime._simulator_parameter_undo.pop(asset_id, None)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="No parameter update is available to undo")
+    config_data = runtime.pipeline.simulator.configuration.model_dump()
+    config_data["asset_parameters"][asset_id] = previous.model_dump()
+    configuration = SimulatorConfiguration.model_validate(config_data)
+    config_hash = await runtime.apply_simulator_configuration(configuration, persist=True)
+    runtime.workflow.ledger.append(
+        f"SIMCFG-{config_hash[:16]}",
+        "operator",
+        "simulator_asset_parameters_undone",
+        {"asset_id": asset_id, "restored": previous.model_dump(), "config_hash": config_hash},
+    )
+    return {"asset_id": asset_id, "parameters": previous.model_dump(), "config_hash": config_hash}
+
+
 @router.get("/simulator/scenarios")
 async def active_scenarios(runtime: RuntimeDep) -> list[dict[str, Any]]:
     return runtime.pipeline.simulator.active_scenarios()
@@ -404,6 +566,111 @@ async def scenario_runs(runtime: RuntimeDep) -> list[dict[str, Any]]:
             }
         )
     return results
+
+
+@router.post("/simulator/runs")
+async def start_simulator_run(
+    request: ScenarioRequest,
+    runtime: RuntimeDep,
+) -> dict[str, Any]:
+    return await inject_scenario(request, runtime)
+
+
+@router.get("/simulator/runs/{run_id}")
+async def get_simulator_run(run_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    run = next(
+        (item for item in runtime.pipeline.scenario_runs if item["scenario_id"] == run_id),
+        None,
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Simulator run not found")
+    return _encoded(run)
+
+
+@router.get("/simulator/runs/{run_id}/export")
+async def export_simulator_run(
+    run_id: str,
+    format: Literal["csv", "parquet", "ndjson"] = "ndjson",
+    *,
+    runtime: RuntimeDep,
+) -> Response:
+    run = next(
+        (item for item in runtime.pipeline.scenario_runs if item["scenario_id"] == run_id),
+        None,
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Simulator run not found")
+    rows = [
+        {
+            "timestamp_utc": reading.timestamp_utc.isoformat(),
+            "asset_id": reading.asset_id,
+            "sensor_id": reading.sensor_id,
+            "measurement_type": reading.measurement_type.value,
+            "value": reading.value,
+            "unit": reading.unit,
+            "quality_flag": reading.quality_flag.value,
+            "scenario_id": reading.scenario_id,
+            "master_seed": run["master_seed"],
+            "config_hash": run["config_hash"],
+            "scenario": run["scenario"],
+            "severity": run["severity"],
+        }
+        for reading in runtime.pipeline.readings
+        if reading.scenario_id == run_id
+    ]
+    if format == "parquet":
+
+        def encode_parquet() -> bytes:
+            output = io.BytesIO()
+            pq.write_table(pa.Table.from_pylist(rows), output)
+            return output.getvalue()
+
+        return Response(
+            await asyncio.to_thread(encode_parquet),
+            media_type="application/vnd.apache.parquet",
+        )
+    if format == "ndjson":
+        content = "".join(json.dumps(_encoded(row), sort_keys=True) + "\n" for row in rows)
+        media_type = "application/x-ndjson"
+    else:
+        buffer = io.StringIO()
+        fields = list(rows[0]) if rows else ["timestamp_utc", "asset_id", "scenario_id"]
+        writer = csv.DictWriter(buffer, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+        content = buffer.getvalue()
+        media_type = "text/csv"
+    return Response(content, media_type=media_type)
+
+
+@router.get("/simulator/assets/{asset_id}/vibration")
+async def raw_vibration_window(
+    asset_id: str,
+    runtime: RuntimeDep,
+    severity: Annotated[float, Query(ge=0, le=1)] = 0,
+) -> dict[str, Any]:
+    try:
+        result = await asyncio.to_thread(
+            runtime.pipeline.simulator.vibration_window, asset_id, severity
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"asset_id": asset_id, "config_hash": runtime.pipeline.simulator.config_hash, **result}
+
+
+@router.post("/simulator/runs/{run_id}/replay")
+async def replay_simulator_run(run_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    run = await get_simulator_run(run_id, runtime)
+    request = ScenarioRequest(
+        asset_id=run["asset_id"],
+        scenario=run["scenario"],
+        severity=run["severity"],
+        duration_ticks=run["duration_ticks"] or 120,
+        seed=run["seed"],
+        measurement_type=run["measurement_type"],
+        recovery_after_ticks=run["recovery_after_ticks"],
+    )
+    return await inject_scenario(request, runtime)
 
 
 @router.delete("/simulator/scenarios/{asset_id}")

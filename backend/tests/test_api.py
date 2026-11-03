@@ -28,6 +28,110 @@ def test_invalid_settings_fail_fast_during_startup(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_simulator_config_reload_speed_and_run_replay() -> None:
+    with TestClient(app) as client:
+        config = client.get("/api/v1/simulator/config")
+        assert config.status_code == 200
+        config_data = config.json()
+        assert len(config_data["config_hash"]) == 64
+        assert config_data["master_seed"] == 17
+
+        speed = client.post("/api/v1/simulator/speed", json={"speed": 10})
+        assert speed.status_code == 200
+        assert speed.json()["sleep_seconds"] == config_data["tick_seconds"] / 10
+
+        started = client.post(
+            "/api/v1/simulator/runs",
+            json={"asset_id": "WD-001", "scenario": "healthy", "seed": 17},
+        )
+        assert started.status_code == 200
+        run_id = started.json()["ground_truth"]["scenario_id"]
+        run = client.get(f"/api/v1/simulator/runs/{run_id}")
+        assert run.status_code == 200
+        assert run.json()["config_hash"] == config_data["config_hash"]
+
+        replay = client.post(f"/api/v1/simulator/runs/{run_id}/replay")
+        assert replay.status_code == 200
+        assert replay.json()["ground_truth"]["scenario"] == "healthy"
+
+        reloaded = client.post("/api/v1/simulator/config/reload")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["config_hash"] == config_data["config_hash"]
+
+
+def test_simulator_config_update_parameters_undo_and_run_exports(monkeypatch) -> None:
+    monkeypatch.setattr("app.runtime.write_simulator_configuration", lambda configuration: None)
+    with TestClient(app) as client:
+        original_config = client.get("/api/v1/simulator/config").json()
+        updated_config = original_config["configuration"]
+        updated_config["master_seed"] = 23
+        updated = client.put("/api/v1/simulator/config", json=updated_config)
+        assert updated.status_code == 200
+        assert updated.json()["master_seed"] == 23
+
+        parameters = {
+            "baseline_scale": 1.05,
+            "load_scale": 0.9,
+            "thermal_time_constant_scale": 1.1,
+        }
+        changed = client.post("/api/v1/simulator/assets/WD-001/parameters", json=parameters)
+        assert changed.status_code == 200
+        assert changed.json()["parameters"] == parameters
+        undone = client.post("/api/v1/simulator/assets/WD-001/parameters/undo")
+        assert undone.status_code == 200
+        assert undone.json()["parameters"]["baseline_scale"] == 1.0
+        audit = client.get("/api/v1/audit").json()
+        assert any(item["event_type"] == "simulator_asset_parameters_updated" for item in audit)
+        assert client.get("/api/v1/audit/verify").json()["ok"] is True
+
+        started = client.post(
+            "/api/v1/simulator/runs",
+            json={"asset_id": "WD-001", "scenario": "bearing_wear", "seed": 31},
+        )
+        assert started.status_code == 200
+        run_id = started.json()["ground_truth"]["scenario_id"]
+        csv_export = client.get(f"/api/v1/simulator/runs/{run_id}/export?format=csv")
+        assert csv_export.status_code == 200
+        assert "scenario_id" in csv_export.text
+        ndjson_export = client.get(f"/api/v1/simulator/runs/{run_id}/export?format=ndjson")
+        assert ndjson_export.status_code == 200
+        assert run_id in ndjson_export.text
+        parquet_export = client.get(f"/api/v1/simulator/runs/{run_id}/export?format=parquet")
+        assert parquet_export.status_code == 200
+        assert parquet_export.content.startswith(b"PAR1")
+        assert parquet_export.content.endswith(b"PAR1")
+
+
+def test_raw_vibration_api_is_separate_from_scalar_telemetry() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/v1/simulator/assets/WD-001/vibration?severity=0.8")
+        assert response.status_code == 200
+        window = response.json()
+        assert window["unit"] == "m/s^2"
+        assert len(window["samples"]) == 12800
+        assert window["bpfo_hz"] < window["sample_rate_hz"] / 2
+        assert client.get("/api/v1/simulator/assets/missing/vibration").status_code == 404
+        assert client.get("/api/v1/simulator/assets/WD-001/vibration?severity=2").status_code == 422
+
+
+def test_sensor_fault_endpoint_uses_separate_scenario_label() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/simulator/sensor-faults",
+            json={
+                "asset_id": "WD-001",
+                "fault": "spike",
+                "duration_ticks": 10,
+                "seed": 31,
+                "measurement_type": "current",
+            },
+        )
+        assert response.status_code == 200
+        ground_truth = response.json()["ground_truth"]
+        assert ground_truth["scenario"] == "sensor_spike"
+        assert ground_truth["scenario_id"]
+
+
 def test_health_system_config_and_seeded_fleet() -> None:
     with TestClient(app) as client:
         assert client.get("/api/v1/health").json()["status"] == "ok"

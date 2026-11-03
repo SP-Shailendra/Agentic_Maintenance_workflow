@@ -1,0 +1,71 @@
+master_seed: 17
+tick_seconds: 5.0
+operating_cycle_ticks: 120
+transport:
+  latency_ticks: 0
+  jitter_ticks: 0
+  loss_probability: 0
+  duplicate_probability: 0
+  out_of_order_probability: 0
+  clock_skew_seconds: 0
+  outage_start_tick: 0
+  outage_duration_ticks: 0
+  buffer_capacity: 10000
+vibration:
+  sample_rate_hz: 12800
+  duration_seconds: 1
+  shaft_frequency_hz: 25
+  resonance_hz: 3000
+  decay_seconds: 0.003
+  harmonic_amplitudes: [0.1, 0.04, 0.02]
+  broadband_sigma: 0.02
+  impulse_amplitude: 3
+  modulation_fraction: 0.2
+  defect: outer
+  bearing_geometry:
+    rolling_elements: 8
+    ball_diameter_mm: 8
+    pitch_diameter_mm: 40
+    contact_angle_degrees: 0
+load_profile:
+  source: sine
+  base: 0.65
+  amplitude: 0.35
+  phase_offset_per_asset: 0.6
+asset_classes:
+  wire_draw_motor:
+    ambient_temperature_c: 22.0
+    thermal_time_constant_seconds: 900.0
+    startup_ticks: 3
+    inrush_multiplier: 2.2
+    signals:
+      vibration_rms: {baseline: 1.8, unit: "mm/s", load_fraction: 0.06, noise_fraction: 0.012, noise_floor: 0.02}
+      temperature: {baseline: 58.0, unit: "degC", load_fraction: 0.04, noise_fraction: 0.012, noise_floor: 0.02}
+      current: {baseline: 12.0, unit: "A", load_fraction: 0.20, noise_fraction: 0.012, noise_floor: 0.02}
+      pressure: {baseline: 5.0, unit: "bar", load_fraction: 0.015, noise_fraction: 0.012, noise_floor: 0.02}
+  testcell_generator:
+    ambient_temperature_c: 22.0
+    thermal_time_constant_seconds: 1200.0
+    startup_ticks: 4
+    inrush_multiplier: 2.5
+    signals:
+      vibration_rms: {baseline: 2.1, unit: "mm/s", load_fraction: 0.06, noise_fraction: 0.012, noise_floor: 0.02}
+      temperature: {baseline: 67.0, unit: "degC", load_fraction: 0.04, noise_fraction: 0.012, noise_floor: 0.02}
+      current: {baseline: 34.0, unit: "A", load_fraction: 0.20, noise_fraction: 0.012, noise_floor: 0.02}
+      pressure: {baseline: 5.5, unit: "bar", load_fraction: 0.015, noise_fraction: 0.012, noise_floor: 0.02}
+  imaging_chiller:
+    ambient_temperature_c: 22.0
+    thermal_time_constant_seconds: 1800.0
+    startup_ticks: 5
+    inrush_multiplier: 2.0
+    signals:
+      vibration_rms: {baseline: 1.2, unit: "mm/s", load_fraction: 0.06, noise_fraction: 0.012, noise_floor: 0.02}
+      temperature: {baseline: 6.0, unit: "degC", load_fraction: 0.04, noise_fraction: 0.012, noise_floor: 0.02}
+      current: {baseline: 8.0, unit: "A", load_fraction: 0.20, noise_fraction: 0.012, noise_floor: 0.02}
+      pressure: {baseline: 7.0, unit: "bar", load_fraction: 0.015, noise_fraction: 0.012, noise_floor: 0.02}
+asset_parameters:
+  WD-001: {baseline_scale: 1.0, load_scale: 1.0, thermal_time_constant_scale: 1.0}
+  WD-002: {baseline_scale: 0.97, load_scale: 0.94, thermal_time_constant_scale: 1.12}
+  TG-001: {baseline_scale: 1.0, load_scale: 1.0, thermal_time_constant_scale: 0.92}
+  IC-001: {baseline_scale: 1.0, load_scale: 0.96, thermal_time_constant_scale: 1.08}
+  IC-002: {baseline_scale: 1.03, load_scale: 1.04, thermal_time_constant_scale: 0.95}

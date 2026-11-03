@@ -27,8 +27,8 @@ class PipelineRunner:
             baseline_size=max(30, self.simulator.operating_cycle_ticks),
             operating_cycle_ticks=self.simulator.operating_cycle_ticks,
         )
-        spc_baselines, isolation_forest_baselines = self._healthy_training_data()
-        self.spc.fit(spc_baselines)
+        spc_baselines, spc_profiles, isolation_forest_baselines = self._healthy_training_data()
+        self.spc.fit(spc_baselines, phase_profiles=spc_profiles)
         self.ensemble = EnsembleDetector()
         self.isolation_forest = IsolationForestDetector()
         self.isolation_forest.train(isolation_forest_baselines)
@@ -134,35 +134,54 @@ class PipelineRunner:
 
     def _healthy_training_data(
         self,
-    ) -> tuple[dict[tuple[str, str], list[float]], dict[tuple[str, str], list[float]]]:
+    ) -> tuple[
+        dict[tuple[str, str], list[float]],
+        dict[tuple[str, str], list[float]],
+        dict[tuple[str, str], list[float]],
+    ]:
         simulator = self.simulator
+        profile_simulator = TelemetrySimulator(
+            assets=list(simulator.assets),
+            seed=simulator.seed,
+            tick_seconds=simulator.tick_seconds,
+            operating_cycle_ticks=simulator.operating_cycle_ticks,
+            noise_scale=0,
+            configuration=simulator.configuration,
+        )
         healthy_simulator = TelemetrySimulator(
             assets=list(simulator.assets),
             seed=simulator.seed + 1,
             tick_seconds=simulator.tick_seconds,
             operating_cycle_ticks=simulator.operating_cycle_ticks,
             noise_scale=simulator.noise_scale,
+            configuration=simulator.configuration,
         )
         asset_classes = {asset.asset_id: asset.asset_class for asset in simulator.assets}
         spc_training: dict[tuple[str, str], list[float]] = defaultdict(list)
+        spc_profiles: dict[tuple[str, str], list[float]] = defaultdict(list)
         isolation_forest_training: dict[tuple[str, str], list[float]] = defaultdict(list)
         training_ticks = max(8 * simulator.operating_cycle_ticks, self.spc.baseline_size)
         for _ in range(training_ticks):
+            for reading in profile_simulator.generate_tick():
+                spc_profiles[(reading.asset_id, reading.measurement_type.value)].append(
+                    reading.value
+                )
+        for _tick in range(training_ticks):
             for reading in healthy_simulator.generate_tick():
                 measurement = reading.measurement_type.value
                 spc_training[(reading.asset_id, measurement)].append(reading.value)
                 isolation_forest_training[(asset_classes[reading.asset_id], measurement)].append(
                     reading.value
                 )
-        return dict(spc_training), dict(isolation_forest_training)
+        return dict(spc_training), dict(spc_profiles), dict(isolation_forest_training)
 
     async def _run(self) -> None:
         while True:
             if self.simulator.paused:
-                await asyncio.sleep(min(self.simulator.tick_seconds, 0.1))
+                await asyncio.sleep(min(self.simulator.clock.sleep_seconds, 0.1))
                 continue
             await self.process_tick()
-            await asyncio.sleep(self.simulator.tick_seconds)
+            await asyncio.sleep(self.simulator.clock.sleep_seconds)
 
     def start(self) -> None:
         if self._task is None or self._task.done():

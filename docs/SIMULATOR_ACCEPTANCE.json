@@ -1,0 +1,16 @@
+{
+  "config_hash": "c90619181a257e0de63c7aa174e8ea11e53a5d000514da8ec6c8a6db0d0949a5",
+  "elapsed_seconds": 108.92920509999385,
+  "end_time_utc": "2026-01-08T00:00:00+00:00",
+  "master_seed": 17,
+  "quality_counts": {
+    "good": 2419200
+  },
+  "readings": 2419200,
+  "simulated_duration_seconds": 604800.0,
+  "source": "synthetic; not a detection benchmark or plant validation",
+  "speed_setting": 100,
+  "telemetry_sha256": "918b29fff5fa63cf88d18ee3f7d9d041511b27e78d4c870df5969b74225b4330",
+  "ticks": 120960,
+  "wall_clock_paced": false
+}

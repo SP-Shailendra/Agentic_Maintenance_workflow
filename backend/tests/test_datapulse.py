@@ -1,14 +1,21 @@
 import asyncio
+import hashlib
 import importlib.util
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from statistics import correlation
 
 import pytest
 
+from app.datapulse.configuration import (
+    SimulatorConfiguration,
+    load_simulator_configuration,
+    write_simulator_configuration,
+)
 from app.datapulse.normalizer import TelemetryNormalizer
 from app.datapulse.pipeline import PipelineRunner
-from app.datapulse.simulator import TelemetrySimulator
+from app.datapulse.simulator import SimClock, TelemetrySimulator
 from app.datapulse_ai.detection.ensemble import EnsembleDetector
 from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
@@ -25,6 +32,191 @@ def test_seeded_simulator_repeats_identically_and_emits_all_assets() -> None:
         item.model_dump() for item in second.generate_tick(timestamp)
     ]
     assert len(first.generate_tick(timestamp)) == 20
+
+
+def test_simulator_yaml_configuration_is_valid_and_hash_stable() -> None:
+    configuration = load_simulator_configuration()
+    replay = load_simulator_configuration()
+
+    assert configuration.config_hash == replay.config_hash
+    assert configuration.asset_parameters["WD-001"].baseline_scale != (
+        configuration.asset_parameters["WD-002"].baseline_scale
+    )
+    invalid = configuration.model_dump()
+    invalid["tick_seconds"] = 0
+    with pytest.raises(ValueError):
+        SimulatorConfiguration.model_validate(invalid)
+
+
+def test_simulator_configuration_yaml_round_trip(tmp_path) -> None:
+    original = load_simulator_configuration()
+    write_simulator_configuration(original, tmp_path)
+
+    reloaded = load_simulator_configuration(tmp_path)
+
+    assert reloaded.config_hash == original.config_hash
+
+
+def test_sim_clock_speeds_are_deterministic_and_validated() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    clock = SimClock(10, t0=start)
+    assert clock.now == start
+    assert clock.advance() == start
+    assert clock.now == start + timedelta(seconds=10)
+    clock.set_speed(10)
+    assert clock.sleep_seconds == 1
+    clock.set_speed(100)
+    assert clock.sleep_seconds == 0.1
+    clock.set_speed("max")
+    assert clock.sleep_seconds == 0
+    with pytest.raises(ValueError):
+        clock.set_speed(5)
+
+
+def test_sensor_noise_autocorrelation_matches_yaml_profile() -> None:
+    config_data = load_simulator_configuration().model_dump()
+    config_data["load_profile"]["amplitude"] = 0
+    for profile in config_data["asset_classes"].values():
+        current = profile["signals"]["current"]
+        current["load_fraction"] = 0
+        current["seasonality_fraction"] = 0
+    current_sensor = config_data["sensors"]["current"]
+    current_sensor.update(
+        {
+            "timestamp_jitter_seconds": 0,
+            "lag_alpha": 1,
+            "noise_ar1": 0.75,
+            "quantization": 0,
+        }
+    )
+    config = SimulatorConfiguration.model_validate(config_data)
+    simulator = TelemetrySimulator(seed=74, tick_seconds=1, configuration=config)
+    values = []
+    for _ in range(600):
+        readings = simulator.generate_tick()
+        values.append(
+            next(
+                reading.value
+                for reading in readings
+                if reading.asset_id == "WD-001"
+                and reading.measurement_type is MeasurementType.CURRENT
+            )
+        )
+
+    assert abs(correlation(values[:-1], values[1:]) - 0.75) < 0.1
+
+
+def test_process_state_stops_current_and_applies_startup_inrush() -> None:
+    simulator = TelemetrySimulator(seed=42, tick_seconds=0, noise_scale=0)
+    assert simulator.set_operating_state("TG-001", "stopped") == "stopped"
+    stopped = simulator.generate_tick()
+    stopped_current = next(
+        reading.value
+        for reading in stopped
+        if reading.asset_id == "TG-001" and reading.measurement_type is MeasurementType.CURRENT
+    )
+    assert stopped_current == 0
+
+    assert simulator.set_operating_state("TG-001", "running") == "starting"
+    starting = simulator.generate_tick()
+    startup_current = next(
+        reading.value
+        for reading in starting
+        if reading.asset_id == "TG-001" and reading.measurement_type is MeasurementType.CURRENT
+    )
+    assert startup_current > stopped_current
+    for _ in range(simulator._asset_profile(simulator.assets[2]).startup_ticks):
+        simulator.generate_tick()
+    assert simulator.process_states["TG-001"] == "running"
+
+
+def test_healthy_means_are_stable_across_thirty_seeds() -> None:
+    per_seed_means = []
+    for seed in range(30):
+        simulator = TelemetrySimulator(seed=seed, tick_seconds=0, operating_cycle_ticks=30)
+        readings = [
+            reading.value
+            for _ in range(30)
+            for reading in simulator.generate_tick()
+            if reading.asset_id == "WD-001"
+            and reading.measurement_type is MeasurementType.VIBRATION_RMS
+        ]
+        per_seed_means.append(sum(readings) / len(readings))
+
+    center = sum(per_seed_means) / len(per_seed_means)
+    assert max(per_seed_means) - min(per_seed_means) < center * 0.08
+
+
+def test_safety_scenarios_are_not_restricted_to_specific_asset_ids() -> None:
+    cases = (
+        ("WD-001", "safety_critical_case"),
+        ("TG-001", "unclassified_case"),
+    )
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    for asset_id, scenario in cases:
+        healthy = TelemetrySimulator(seed=18, tick_seconds=0, noise_scale=0)
+        faulted = TelemetrySimulator(seed=18, tick_seconds=0, noise_scale=0)
+        faulted.inject(asset_id, scenario, duration_ticks=10)
+        healthy_readings = []
+        faulted_readings = []
+        for tick in range(6):
+            timestamp = start + timedelta(seconds=tick)
+            healthy_readings = healthy.generate_tick(timestamp)
+            faulted_readings = faulted.generate_tick(timestamp)
+        measurement = next(
+            reading.measurement_type
+            for reading in faulted_readings
+            if reading.asset_id == asset_id
+            and reading.measurement_type == MeasurementType.VIBRATION_RMS
+        )
+        healthy_value = next(
+            reading.value
+            for reading in healthy_readings
+            if reading.asset_id == asset_id and reading.measurement_type == measurement
+        )
+        faulted_value = next(
+            reading.value
+            for reading in faulted_readings
+            if reading.asset_id == asset_id and reading.measurement_type == measurement
+        )
+        assert faulted_value > healthy_value
+
+
+def test_bearing_wear_vibration_signature_precedes_temperature() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    healthy = TelemetrySimulator(seed=18, tick_seconds=5, noise_scale=0)
+    faulted = TelemetrySimulator(seed=18, tick_seconds=5, noise_scale=0)
+    faulted.inject("WD-001", "bearing_wear", severity=1, duration_ticks=100)
+    first_vibration_tick = None
+    first_temperature_tick = None
+
+    for tick in range(100):
+        time = timestamp + timedelta(seconds=tick * 5)
+        healthy_readings = healthy.generate_tick(time)
+        faulted_readings = faulted.generate_tick(time)
+        for measurement_type, threshold in (
+            (MeasurementType.VIBRATION_RMS, 0.1),
+            (MeasurementType.TEMPERATURE, 0.05),
+        ):
+            healthy_value = next(
+                reading.value
+                for reading in healthy_readings
+                if reading.asset_id == "WD-001" and reading.measurement_type is measurement_type
+            )
+            faulted_value = next(
+                reading.value
+                for reading in faulted_readings
+                if reading.asset_id == "WD-001" and reading.measurement_type is measurement_type
+            )
+            if faulted_value - healthy_value >= threshold:
+                if measurement_type is MeasurementType.VIBRATION_RMS:
+                    first_vibration_tick = first_vibration_tick or tick
+                else:
+                    first_temperature_tick = first_temperature_tick or tick
+
+    assert first_vibration_tick is not None
+    assert first_temperature_tick is not None
+    assert first_vibration_tick < first_temperature_tick
 
 
 def test_seeded_fault_replay_is_identical_across_multiple_ticks() -> None:
@@ -53,6 +245,93 @@ def test_seeded_fault_replay_is_identical_across_multiple_ticks() -> None:
 
 def test_baseline_report_is_reproducible_for_fixed_seed() -> None:
     assert run_baseline(ticks=12) == run_baseline(ticks=12)
+
+
+def test_composable_degradation_curves_and_cycle_rejection() -> None:
+    from app.datapulse.configuration import ScenarioProfile
+
+    for curve in ("linear", "exponential", "stepwise", "sigmoid", "bursty", "weibull"):
+        profile = ScenarioProfile(curve=curve, onset_delay_ticks=0)
+        assert TelemetrySimulator._degradation(profile, 0) == 0
+        assert TelemetrySimulator._degradation(profile, 16) > 0
+    configuration = load_simulator_configuration()
+    simulator = TelemetrySimulator(configuration=configuration)
+    expected = sum(
+        simulator._fault_effect(component, "temperature", 16)
+        for component in ("bearing_wear", "fouling")
+    )
+    assert simulator._fault_effect("compound_fault", "temperature", 16) == expected
+    payload = configuration.model_dump()
+    payload["scenarios"]["bearing_wear"]["components"] = ["compound_fault"]
+    with pytest.raises(ValueError, match="Cyclic"):
+        SimulatorConfiguration.model_validate(payload)
+
+
+def test_transport_outage_store_forward_duplicates_loss_and_reset() -> None:
+    configuration = load_simulator_configuration()
+    configuration.transport.outage_duration_ticks = 2
+    configuration.transport.duplicate_probability = 1
+    simulator = TelemetrySimulator(configuration=configuration)
+    assert simulator.generate_tick() == []
+    assert simulator.generate_tick() == []
+    burst = simulator.generate_tick()
+    assert len(burst) == 120
+    normalizer = TelemetryNormalizer()
+    for reading in burst:
+        normalizer.normalize(reading)
+    assert normalizer.dropped_duplicate == 60
+    simulator.reset()
+    assert len(simulator._transport_pending) == 0
+    configuration.transport.loss_probability = 1
+    assert simulator.generate_tick() == []
+    assert simulator.transport_dropped == 20
+
+
+def test_transport_latency_and_clock_skew_preserve_measurement_time() -> None:
+    configuration = load_simulator_configuration()
+    configuration.transport.latency_ticks = 1
+    configuration.transport.clock_skew_seconds = 30
+    for sensor in configuration.sensors.values():
+        sensor.timestamp_jitter_seconds = 0
+    simulator = TelemetrySimulator(configuration=configuration)
+    epoch = simulator.clock.now
+    assert simulator.generate_tick() == []
+    delivered = simulator.generate_tick()
+    assert len(delivered) == 20
+    assert delivered[0].timestamp_utc == epoch + timedelta(seconds=30)
+
+
+def test_raw_vibration_determinism_and_bearing_envelope_peak() -> None:
+    simulator = TelemetrySimulator(seed=17)
+    control = TelemetrySimulator(seed=17)
+    healthy = simulator.vibration_window("WD-001")
+    assert healthy == control.vibration_window("WD-001")
+    fault = simulator.vibration_window("WD-001", severity=0.8)
+    assert len(fault["samples"]) == 12800
+    assert fault["rms"] > healthy["rms"]
+    assert fault["crest_factor"] > healthy["crest_factor"]
+    spectrum = fault["envelope_amplitudes"]
+    peak = max(range(1, len(spectrum)), key=spectrum.__getitem__)
+    assert abs(fault["envelope_frequencies_hz"][peak] - fault["bpfo_hz"]) <= 1
+    with pytest.raises(KeyError):
+        simulator.vibration_window("missing")
+    payload = simulator.configuration.model_dump()
+    payload["vibration"]["resonance_hz"] = 10000
+    with pytest.raises(ValueError, match="Nyquist"):
+        SimulatorConfiguration.model_validate(payload)
+
+
+def test_default_telemetry_golden_digest() -> None:
+    simulator = TelemetrySimulator(seed=17)
+    rows = [
+        reading.model_dump(mode="json")
+        for _tick in range(3)
+        for reading in simulator.generate_tick()
+    ]
+    digest = hashlib.sha256(
+        json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert digest == "be2101e1eb368f41254aded05f3bdd186b3f293c8c70d958a46a82b81dc9a1b4"
 
 
 def test_healthy_300_ticks_have_no_post_warmup_anomalies() -> None:
@@ -171,8 +450,36 @@ def test_operating_cycle_correlates_load_temperature_and_vibration() -> None:
         currents.append(values[MeasurementType.CURRENT])
         temperatures.append(values[MeasurementType.TEMPERATURE])
         vibration.append(values[MeasurementType.VIBRATION_RMS])
-    assert correlation(currents, temperatures) > 0.95
+    assert correlation(currents, temperatures) > 0.6
     assert correlation(currents, vibration) > 0.95
+
+
+def test_temperature_responds_to_overheat_with_configured_lag() -> None:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    healthy = TelemetrySimulator(seed=29, tick_seconds=300, noise_scale=0)
+    faulted = TelemetrySimulator(seed=29, tick_seconds=300, noise_scale=0)
+    faulted.inject("TG-001", "overheat", severity=1, duration_ticks=None)
+    differences: list[float] = []
+
+    for tick in range(12):
+        healthy_readings = healthy.generate_tick(timestamp + timedelta(seconds=tick * 300))
+        faulted_readings = faulted.generate_tick(timestamp + timedelta(seconds=tick * 300))
+        healthy_temperature = next(
+            reading.value
+            for reading in healthy_readings
+            if reading.asset_id == "TG-001"
+            and reading.measurement_type is MeasurementType.TEMPERATURE
+        )
+        faulted_temperature = next(
+            reading.value
+            for reading in faulted_readings
+            if reading.asset_id == "TG-001"
+            and reading.measurement_type is MeasurementType.TEMPERATURE
+        )
+        differences.append(faulted_temperature - healthy_temperature)
+
+    assert differences[2] == 0
+    assert differences[3] < differences[6] < differences[-1]
 
 
 def test_intermittent_and_recovering_fault_profiles_change_over_time() -> None:

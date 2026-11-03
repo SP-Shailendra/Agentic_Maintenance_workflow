@@ -1,0 +1,5 @@
+sensors:
+  vibration_rms: {sample_every_ticks: 1, timestamp_jitter_seconds: 0.02, quantization: 0.0001, lag_alpha: 1.0, noise_multiplier: 1.0, noise_ar1: 0.35}
+  temperature: {sample_every_ticks: 1, timestamp_jitter_seconds: 0.10, quantization: 0.01, lag_alpha: 0.20, noise_multiplier: 1.0, noise_ar1: 0.75}
+  current: {sample_every_ticks: 1, timestamp_jitter_seconds: 0.02, quantization: 0.01, lag_alpha: 1.0, noise_multiplier: 1.0, noise_ar1: 0.25}
+  pressure: {sample_every_ticks: 1, timestamp_jitter_seconds: 0.05, quantization: 0.001, lag_alpha: 1.0, noise_multiplier: 1.0, noise_ar1: 0.55}

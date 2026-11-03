@@ -1,0 +1,60 @@
+scenarios:
+  healthy: {}
+  bearing_wear:
+    curve: exponential
+    curve_rate: 0.002
+    health_variable: bearing_wear
+    effects_per_tick: {vibration_rms: 0.25, temperature: 0.9}
+  safety_critical_case:
+    effects_per_tick: {vibration_rms: 0.25, temperature: 0.9}
+  unclassified_case:
+    effects_per_tick: {vibration_rms: 0.25, temperature: 0.9}
+  intermittent_bearing:
+    effects_per_tick: {vibration_rms: 0.25, temperature: 0.9}
+    intermittent_period_ticks: 8
+    intermittent_active_ticks: 3
+  recovering_bearing_wear:
+    effects_per_tick: {vibration_rms: 0.25, temperature: 0.9}
+  overheat:
+    effects_per_tick: {temperature: 1.8, current: 0.7}
+  pressure_drop:
+    effects_per_tick: {pressure: -0.3}
+  imbalance:
+    effects_per_tick: {vibration_rms: 0.35}
+  misalignment:
+    effects_per_tick: {vibration_rms: 0.2, current: 0.15}
+  fouling:
+    effects_per_tick: {temperature: 0.8, current: 0.12}
+  winding_insulation_degradation:
+    effects_per_tick: {temperature: 0.5, current: 0.18}
+  refrigerant_loss:
+    effects_per_tick: {temperature: 1.0, pressure: -0.15, current: 0.1}
+  blocked_filter:
+    effects_per_tick: {pressure: -0.2, current: 0.1}
+  capacitor_degradation:
+    effects_per_tick: {current: 0.25}
+  sudden_trip:
+    effects_per_tick: {current: -0.8, vibration_rms: -0.5}
+    process_state: stopped
+  compound_fault:
+    components: [bearing_wear, fouling]
+  sensor_dropout:
+    sensor_fault: dropout
+  sensor_spike:
+    sensor_fault: spike
+  sensor_stuck_at:
+    sensor_fault: stuck_at
+  sensor_flat_line:
+    sensor_fault: flat_line
+  sensor_bias_step:
+    sensor_fault: bias_step
+  sensor_noise_increase:
+    sensor_fault: noise_increase
+  sensor_unit_flip:
+    sensor_fault: unit_flip
+  sensor_swapped_channels:
+    sensor_fault: swapped_channels
+  bad_quality:
+    sensor_fault: bad_quality
+  out_of_order:
+    sensor_fault: out_of_order

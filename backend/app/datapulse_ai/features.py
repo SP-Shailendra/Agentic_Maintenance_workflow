@@ -1,4 +1,4 @@
-"""L2 rolling sensor statistics and optional vibration FFT peaks."""
+"""L2 rolling statistics for low-rate scalar sensor readings."""
 
 from collections import defaultdict, deque
 from math import sqrt
@@ -32,7 +32,6 @@ class FeatureEngine:
             series and (reading.timestamp_utc - series[0].timestamp_utc).total_seconds() > maximum
         ):
             series.popleft()
-        values = [sample.value for sample in series]
         features: dict[str, Any] = {
             "asset_id": reading.asset_id,
             "measurement_type": reading.measurement_type.value,
@@ -61,34 +60,7 @@ class FeatureEngine:
             (reading.value - prior) / self.sample_interval_seconds if prior is not None else 0.0
         )
         self._previous[key] = reading.value
-        if reading.measurement_type == MeasurementType.VIBRATION_RMS:
-            features["fft_peaks"] = self._fft_peaks(values, self.sample_interval_seconds)
         return features
-
-    @staticmethod
-    def _fft_peaks(
-        values: list[float],
-        sample_interval_seconds: float,
-        top_n: int = 3,
-    ) -> list[dict[str, float]]:
-        if len(values) < 4:
-            return []
-        try:
-            import numpy as np
-        except ImportError:
-            return []
-        samples = np.asarray(values)
-        spectrum = np.abs(np.fft.rfft(samples - np.mean(samples)))
-        frequencies = np.fft.rfftfreq(len(values), d=sample_interval_seconds)
-        indices = sorted(
-            range(1, len(spectrum)),
-            key=lambda index: spectrum[index],
-            reverse=True,
-        )[:top_n]
-        return [
-            {"frequency_hz": float(frequencies[index]), "magnitude": float(spectrum[index])}
-            for index in indices
-        ]
 
 
 def health_index(detector_scores: list[float]) -> float:

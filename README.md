@@ -124,7 +124,7 @@ stateDiagram-v2
 | Layer | Responsibility | Main modules |
 | --- | --- | --- |
 | L1 DataPulse | Synthetic sensor source, unit normalization, bounded bus, pipeline runner, and event publishing | `backend/app/datapulse/` |
-| L2 Features | Rolling windows, RMS/statistics, rate of change, vibration FFT peaks, operating context, health index | `backend/app/datapulse_ai/features.py` |
+| L2 Features | Rolling windows, RMS/statistics, rate of change, operating context, health index; no FFT is claimed for low-rate scalar RMS | `backend/app/datapulse_ai/features.py` |
 | L3 Detection | Per-asset SPC/5-sigma/CUSUM, optional calibrated Isolation Forest, weighted ensemble, quiet/dedup suppression | `backend/app/datapulse_ai/detection/`, `backend/app/datapulse_ai/model_store.py` |
 | L4 AgentWeave | Diagnosis/work-order proposal, policy, workflow state, LangGraph gate declaration, in-memory demo workflow runner | `backend/app/agentweave/` |
 | L5 Grounding | Section chunking, known fault library, asset-class filtered keyword retrieval, exact citation validator | `backend/app/grounding/` |
@@ -150,7 +150,7 @@ stateDiagram-v2
 
 **L1 DataPulse:** `TelemetrySimulator` generates seeded readings for five assets. `TelemetryNormalizer` converts supported units, rejects bad quality, de-duplicates, and drops out-of-order samples. `StreamBus` is a bounded in-process asyncio queue; `PipelineRunner` connects simulator, normalizer, features, detector, suppression, workflow callbacks, and SSE event queues. Simulator ticks default to five seconds; the API scenario endpoint runs a bounded 24-tick burst for fast feedback.
 
-**L2 Features:** feature windows are 1, 5, 15, and 60 minutes and report mean, standard deviation, min/max, RMS, and rate of change. Vibration features include top FFT peaks when NumPy is available. Context adds asset class, tier, days since PM, and open mock work orders. The health index is a demo score from detector outputs, not a certified equipment-health measurement.
+**L2 Features:** feature windows are 1, 5, 15, and 60 minutes and report mean, standard deviation, min/max, RMS, and rate of change. The current five-second scalar vibration RMS stream is too low-rate for bearing-spectrum analysis, so no FFT claim is made for it. Context adds asset class, tier, days since PM, and open mock work orders. The health index is a demo score from detector outputs, not a certified equipment-health measurement.
 
 **L3 Detection:** SPC keeps per-asset, per-measurement histories and CUSUM state, trained from phase-conditioned healthy readings across eight simulator cycles. Its current synthetic-demo limits are five sigma and a CUSUM limit of 30; these are not validated against real plant data. Optional Isolation Forest scores are calibrated against the healthy training-score tail and observed input range, avoiding the former min/max normalization that made ordinary in-distribution samples look anomalous. It remains gracefully unavailable if scikit-learn/joblib are missing. The ensemble combines configured detector weights; suppression tracks quiet and duplicate windows. Scenario labels are not detector features. Detection records receive a `scenario_id` only after a detector event is emitted so run outcomes can be evaluated without label leakage.
 
@@ -186,7 +186,7 @@ Seed files contain `WD-001`, `WD-002`, `TG-001`, `IC-001` (safety-critical), and
 
 ### Signal and Fault Profiles
 
-The baseline generator combines Gaussian noise with an operating cycle. Load, current, temperature, vibration, and pressure covary by asset class. Fault severity scales scenario effects. Supported profiles:
+The simulator reads asset-class physics, per-asset scales, fault effects, and sensor profiles from `data/simulator/`. Defaults are synthetic placeholders; see [docs/SIMULATOR.md](docs/SIMULATOR.md) for rationale, calibration, and known gaps. Load sources support sine, schedules, CSV replay, and random walk. The process model tracks stopped/starting/running/idle/stopping states, startup current inrush, ambient-relative thermal lag, and independent NumPy `SeedSequence` streams.
 
 | Profile | Signal behavior |
 | --- | --- |
@@ -196,8 +196,8 @@ The baseline generator combines Gaussian noise with an operating cycle. Load, cu
 | `recovering_bearing_wear` | Bearing wear ramps, then decays after `recovery_after_ticks`. |
 | `overheat` | Temperature and current rise together. |
 | `pressure_drop` | Pressure decreases over the scenario. |
-| `safety_critical_case` | Bearing-style fault on `IC-001`; safety routing is still determined by the asset classification. |
-| `unclassified_case` | Bearing-style fault on `IC-002`; null safety classification routes to a human. |
+| `safety_critical_case` | Bearing-style fault on any selected asset; safety routing is still determined by the asset classification. |
+| `unclassified_case` | Bearing-style fault on any selected asset; null safety classification routes to a human. |
 | `sensor_dropout` | Omits the selected measurement. |
 | `bad_quality` | Emits the selected measurement with `quality_flag=bad`; the normalizer drops it. |
 | `out_of_order` | Alternates timestamp skew so the normalizer observes real out-of-order samples. |
@@ -229,7 +229,15 @@ Base URL: `http://localhost:8000/api/v1`; OpenAPI UI: `http://localhost:8000/doc
 | GET | `/audit?correlation_id=`, `/audit/verify` | Audit events and chain verification. |
 | GET | `/kpis`, `/llm/stats` | Session KPIs and model-call metrics. |
 | POST | `/simulator/scenarios` | Inject timed ground truth; body includes asset, profile, severity, duration, seed, optional sensor/recovery fields. |
+| POST | `/simulator/sensor-faults` | Inject a separately labelled sensor fault. |
 | GET | `/simulator/scenarios`, DELETE `/simulator/scenarios/{asset_id}` | List and clear active scenario runs. |
+| GET/PUT | `/simulator/config` | Read or replace the validated merged YAML configuration. |
+| POST | `/simulator/config/reload` | Reload YAML files and rebuild the in-memory pipeline. |
+| POST | `/simulator/speed` | Set SimClock to `1`, `10`, `100`, or `max`. |
+| POST/GET | `/simulator/runs`, `/simulator/runs/{id}` | Start a run or retrieve ground-truth and detector results. |
+| POST/GET | `/simulator/runs/{id}/replay`, `/simulator/runs/{id}/export?format=csv\|parquet\|ndjson` | Reapply run controls or export telemetry with ground-truth labels. |
+| GET | `/simulator/assets/{id}/vibration?severity=` | Separate raw acceleration window and bearing-envelope features; never an FFT of scalar velocity RMS. |
+| POST | `/simulator/assets/{id}/parameters`, `/simulator/assets/{id}/parameters/undo` | Apply an audited per-asset scale tweak and undo the last change. |
 | GET | `/simulator/runs` | Ground-truth vs detector outcomes, misses, false positives, and delay. |
 | POST | `/simulator/demo-workflow` | Explicitly bypass detection and send a labeled demo event to approval. |
 | POST | `/simulator/pause`, `/simulator/resume`, `/simulator/reset` | Simulator controls. |

@@ -27,6 +27,8 @@ dependencies = [
   "fastembed>=0.4",
   "pgvector>=0.3",
   "joblib>=1.4",
+  "PyYAML>=6.0",
+  "pyarrow>=19,<22",
 ]
 
 [project.optional-dependencies]
