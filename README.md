@@ -125,7 +125,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | L1 DataPulse | Synthetic sensor source, unit normalization, bounded bus, pipeline runner, and event publishing | `backend/app/datapulse/` |
 | L2 Features | Rolling windows, RMS/statistics, rate of change, vibration FFT peaks, operating context, health index | `backend/app/datapulse_ai/features.py` |
-| L3 Detection | SPC/3-sigma/CUSUM, optional Isolation Forest, weighted ensemble, quiet/dedup suppression | `backend/app/datapulse_ai/detection/`, `backend/app/datapulse_ai/model_store.py` |
+| L3 Detection | Per-asset SPC/5-sigma/CUSUM, optional calibrated Isolation Forest, weighted ensemble, quiet/dedup suppression | `backend/app/datapulse_ai/detection/`, `backend/app/datapulse_ai/model_store.py` |
 | L4 AgentWeave | Diagnosis/work-order proposal, policy, workflow state, LangGraph gate declaration, in-memory demo workflow runner | `backend/app/agentweave/` |
 | L5 Grounding | Section chunking, known fault library, asset-class filtered keyword retrieval, exact citation validator | `backend/app/grounding/` |
 | L6 Adapters | CMMS, inventory, and scheduling contracts; mocks; Maximo/SAP PM placeholders | `backend/app/adapters/` |
@@ -152,7 +152,7 @@ stateDiagram-v2
 
 **L2 Features:** feature windows are 1, 5, 15, and 60 minutes and report mean, standard deviation, min/max, RMS, and rate of change. Vibration features include top FFT peaks when NumPy is available. Context adds asset class, tier, days since PM, and open mock work orders. The health index is a demo score from detector outputs, not a certified equipment-health measurement.
 
-**L3 Detection:** SPC uses seeded healthy reference values to warm its baseline before simulator readings; it adds a three-sigma score and two-sided CUSUM. Isolation Forest training is optional and gracefully unavailable if scikit-learn/joblib are missing. The ensemble combines configured detector weights; suppression tracks quiet and duplicate windows. Scenario labels are not detector features. Detection records receive a `scenario_id` only after a detector event is emitted so run outcomes can be evaluated without label leakage.
+**L3 Detection:** SPC keeps per-asset, per-measurement histories and CUSUM state, trained from phase-conditioned healthy readings across eight simulator cycles. Its current synthetic-demo limits are five sigma and a CUSUM limit of 30; these are not validated against real plant data. Optional Isolation Forest scores are calibrated against the healthy training-score tail and observed input range, avoiding the former min/max normalization that made ordinary in-distribution samples look anomalous. It remains gracefully unavailable if scikit-learn/joblib are missing. The ensemble combines configured detector weights; suppression tracks quiet and duplicate windows. Scenario labels are not detector features. Detection records receive a `scenario_id` only after a detector event is emitted so run outcomes can be evaluated without label leakage.
 
 **L4 AgentWeave:** the demo runner retrieves manuals, asks the selected fake/Groq structured-output client for a diagnosis and work-order proposal, validates every citation/fault code, creates a draft/queued work order, performs read-only parts checks, proposes a qualified technician, and stores a pending approval package. The API currently uses this in-memory facade. A separate LangGraph `StateGraph` contains an interrupt gate, but API approvals do not yet resume that graph.
 
@@ -202,7 +202,7 @@ The baseline generator combines Gaussian noise with an operating cycle. Load, cu
 | `bad_quality` | Emits the selected measurement with `quality_flag=bad`; the normalizer drops it. |
 | `out_of_order` | Alternates timestamp skew so the normalizer observes real out-of-order samples. |
 
-Scenario controls include asset, severity 0-1, duration in ticks, seed, optional targeted sensor, and optional recovery tick. Runs show active/elapsed/remaining ticks and can be cleared. Fault ramps start at injection, not process uptime. `reset(seed=...)` restarts the seeded generator. For the same seed and control sequence, replayed telemetry and scenario IDs are deterministic.
+Scenario controls include asset, severity 0-1, duration in ticks, seed, optional targeted sensor, and optional recovery tick. Each asset has an independent seeded noise stream, so reseeding one scenario does not change peer assets. Runs show active/elapsed/remaining ticks and can be cleared. Fault ramps start at injection, not process uptime. `reset(seed=...)` restarts the seeded generators. For the same seed and control sequence, replayed telemetry and scenario IDs are deterministic.
 
 ### Ground Truth and Detector Output
 

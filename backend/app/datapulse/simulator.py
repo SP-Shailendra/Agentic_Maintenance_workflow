@@ -1,6 +1,7 @@
 """L1 deterministic sensor simulator for the five seeded assets."""
 
 import asyncio
+import hashlib
 import json
 import math
 import random
@@ -50,7 +51,10 @@ class TelemetrySimulator:
     ) -> None:
         self.assets = assets or load_assets()
         self.seed = seed
-        self.random = random.Random(seed)
+        self._random_by_asset = {
+            asset.asset_id: random.Random(self._asset_seed(seed, asset.asset_id))
+            for asset in self.assets
+        }
         self.tick_seconds = tick_seconds
         self.operating_cycle_ticks = max(1, operating_cycle_ticks)
         if noise_scale < 0:
@@ -115,7 +119,7 @@ class TelemetrySimulator:
         if scenario == "recovering_bearing_wear" and recovery_after_ticks is None:
             recovery_after_ticks = max(1, duration_ticks // 2) if duration_ticks is not None else 40
         if seed is not None:
-            self.random.seed(seed)
+            self._random_by_asset[asset_id].seed(seed)
         self.scenarios[asset_id] = scenario
         self.scenario_counter += 1
         scenario_id = f"SCN-{asset_id}-{self.tick}-{self.scenario_counter:04d}"
@@ -210,7 +214,7 @@ class TelemetrySimulator:
                     MeasurementType.PRESSURE: baseline * 0.015,
                 }[measurement_type]
                 seasonality = math.sin((cycle_tick + asset_index * 3) / 12) * baseline * 0.015
-                noise = self.random.gauss(
+                noise = self._random_by_asset[asset.asset_id].gauss(
                     0,
                     max(abs(baseline) * 0.012, 0.02) * self.noise_scale,
                 )
@@ -293,7 +297,10 @@ class TelemetrySimulator:
     def reset(self, *, seed: int | None = None) -> None:
         self.tick = 0
         self.seed = self.seed if seed is None else seed
-        self.random.seed(self.seed)
+        self._random_by_asset = {
+            asset.asset_id: random.Random(self._asset_seed(self.seed, asset.asset_id))
+            for asset in self.assets
+        }
         self.scenarios = {asset.asset_id: "healthy" for asset in self.assets}
         self.scenario_started_ticks.clear()
         self.scenario_durations.clear()
@@ -304,3 +311,8 @@ class TelemetrySimulator:
         self.scenario_recovery_ticks.clear()
         self.scenario_counter = 0
         self.paused = False
+
+    @staticmethod
+    def _asset_seed(seed: int, asset_id: str) -> int:
+        digest = hashlib.blake2b(f"{seed}:{asset_id}".encode(), digest_size=8).digest()
+        return int.from_bytes(digest, byteorder="big")

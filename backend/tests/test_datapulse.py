@@ -53,25 +53,11 @@ def test_baseline_report_is_reproducible_for_fixed_seed() -> None:
     assert run_baseline(ticks=12) == run_baseline(ticks=12)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known bug: healthy cyclic signals still trigger detector events",
-)
 def test_healthy_300_ticks_have_no_post_warmup_anomalies() -> None:
-    async def run() -> list[object]:
-        runner = PipelineRunner(TelemetrySimulator(seed=17, tick_seconds=5))
-        for _ in range(300):
-            await runner.process_tick()
-        return [
-            anomaly
-            for anomaly in runner.anomalies
-            if anomaly.detected_at_tick is not None and anomaly.detected_at_tick >= 10
-        ]
-
-    assert asyncio.run(run()) == []
+    healthy = run_baseline(ticks=300)["runs"][0]
+    assert healthy["anomaly_events"] == healthy["startup_events_before_tick_10"]
 
 
-@pytest.mark.xfail(strict=True, reason="Known bug: SPC baseline is shared by asset class")
 def test_spc_baseline_isolated_between_assets_of_same_class() -> None:
     detector = SPCDetector(baseline_size=30)
     for _ in range(30):
@@ -80,7 +66,6 @@ def test_spc_baseline_isolated_between_assets_of_same_class() -> None:
     assert max(wd002_scores) < 0.1
 
 
-@pytest.mark.xfail(strict=True, reason="Known bug: scenario seed resets the shared fleet RNG")
 def test_reseeding_one_asset_does_not_change_other_asset_readings() -> None:
     timestamp = datetime(2026, 1, 1, tzinfo=UTC)
     injected = TelemetrySimulator(seed=17, tick_seconds=0)
@@ -97,9 +82,19 @@ def test_reseeding_one_asset_does_not_change_other_asset_readings() -> None:
     assert injected_other_assets == control_other_assets
 
 
+def test_isolation_forest_scores_outliers_but_not_healthy_training_values() -> None:
+    pytest.importorskip("sklearn")
+    detector = IsolationForestDetector(seed=17)
+    training = [1.0 + index / 10_000 for index in range(1_000)]
+
+    assert detector.train({("wire_draw_motor", "vibration_rms"): training})
+    assert detector.score("wire_draw_motor", "vibration_rms", 1.05) == 0.0
+    assert detector.score("wire_draw_motor", "vibration_rms", 100.0) > 0.9
+
+
 def test_pipeline_preloads_spc_healthy_baselines_before_fault_ticks() -> None:
     runner = PipelineRunner(TelemetrySimulator(seed=12, tick_seconds=0))
-    baseline = runner.spc._history[("wire_draw_motor", "vibration_rms")]
+    baseline = runner.spc._history[("WD-001", "vibration_rms")]
     assert len(baseline) == runner.spc.baseline_size
     score = runner.spc.score("wire_draw_motor", "vibration_rms", "WD-001", 20.0)
     assert score > 0.9

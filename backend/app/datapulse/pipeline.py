@@ -1,13 +1,14 @@
 """L1 streaming runner connecting normalization, bus, features, and detectors."""
 
 import asyncio
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from app.datapulse.bus import StreamBus
 from app.datapulse.normalizer import TelemetryNormalizer
-from app.datapulse.simulator import BASELINES, TelemetrySimulator
+from app.datapulse.simulator import TelemetrySimulator
 from app.datapulse_ai.detection.ensemble import EnsembleDetector
 from app.datapulse_ai.detection.isolation_forest import IsolationForestDetector
 from app.datapulse_ai.detection.spc import SPCDetector
@@ -22,12 +23,15 @@ class PipelineRunner:
         self.normalizer = TelemetryNormalizer()
         self.bus = StreamBus()
         self.features = FeatureEngine()
-        self.spc = SPCDetector()
-        healthy_baselines = self._healthy_training_data()
-        self.spc.fit(healthy_baselines)
+        self.spc = SPCDetector(
+            baseline_size=max(30, self.simulator.operating_cycle_ticks),
+            operating_cycle_ticks=self.simulator.operating_cycle_ticks,
+        )
+        spc_baselines, isolation_forest_baselines = self._healthy_training_data()
+        self.spc.fit(spc_baselines)
         self.ensemble = EnsembleDetector()
         self.isolation_forest = IsolationForestDetector()
-        self.isolation_forest.train(healthy_baselines)
+        self.isolation_forest.train(isolation_forest_baselines)
         self.suppressor = AlertSuppressor()
         self.readings: list[TelemetryReading] = []
         self.anomalies: list[AnomalyEvent] = []
@@ -65,11 +69,15 @@ class PipelineRunner:
             )
             latest_features[asset.asset_id] = feature
             latest_scenario_ids[asset.asset_id] = normalized.scenario_id
+            cycle_tick = self.simulator.tick - 1
+            if normalized.scenario_id is not None:
+                cycle_tick -= self.simulator.scenario_started_ticks.get(asset.asset_id, cycle_tick)
             spc_score = self.spc.score(
                 asset.asset_class,
                 normalized.measurement_type.value,
                 normalized.asset_id,
                 normalized.value,
+                cycle_tick=cycle_tick,
             )
             latest.setdefault(normalized.asset_id, {})[normalized.measurement_type.value] = {
                 "spc": spc_score,
@@ -124,16 +132,29 @@ class PipelineRunner:
                 run["end_time_utc"] = datetime.now(UTC).isoformat()
         return tick_anomalies
 
-    @staticmethod
-    def _healthy_training_data() -> dict[tuple[str, str], list[float]]:
-        training: dict[tuple[str, str], list[float]] = {}
-        for asset_class, measurements in BASELINES.items():
-            for measurement_type, (baseline, _) in measurements.items():
-                spread = max(abs(baseline) * 0.015, 0.02)
-                training[(asset_class, measurement_type.value)] = [
-                    baseline + ((index % 11) - 5) * spread / 5 for index in range(100)
-                ]
-        return training
+    def _healthy_training_data(
+        self,
+    ) -> tuple[dict[tuple[str, str], list[float]], dict[tuple[str, str], list[float]]]:
+        simulator = self.simulator
+        healthy_simulator = TelemetrySimulator(
+            assets=list(simulator.assets),
+            seed=simulator.seed + 1,
+            tick_seconds=simulator.tick_seconds,
+            operating_cycle_ticks=simulator.operating_cycle_ticks,
+            noise_scale=simulator.noise_scale,
+        )
+        asset_classes = {asset.asset_id: asset.asset_class for asset in simulator.assets}
+        spc_training: dict[tuple[str, str], list[float]] = defaultdict(list)
+        isolation_forest_training: dict[tuple[str, str], list[float]] = defaultdict(list)
+        training_ticks = max(8 * simulator.operating_cycle_ticks, self.spc.baseline_size)
+        for _ in range(training_ticks):
+            for reading in healthy_simulator.generate_tick():
+                measurement = reading.measurement_type.value
+                spc_training[(reading.asset_id, measurement)].append(reading.value)
+                isolation_forest_training[(asset_classes[reading.asset_id], measurement)].append(
+                    reading.value
+                )
+        return dict(spc_training), dict(isolation_forest_training)
 
     async def _run(self) -> None:
         while True:
